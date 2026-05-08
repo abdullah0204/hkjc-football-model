@@ -880,8 +880,8 @@ with tab_model:
         saved = st.session_state["last_analysis"]
         final = saved["final"]
         league_result = saved["league_result"]
-        home_recent = saved["home_recent", None]
-        away_recent = saved["away_recent", None]
+        home_recent = saved["home_recent"]
+        away_recent = saved["away_recent"]
         trend_rows = saved["trend_rows"]
         signal = saved["signal"]
 
