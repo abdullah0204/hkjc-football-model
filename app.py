@@ -1,11 +1,8 @@
 import streamlit as st
 import pandas as pd
+import requests
 from difflib import get_close_matches, SequenceMatcher
 from datetime import date
-
-APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOpCg7z7Mm6PJ1G1fTduYlNFRUase3ZZsqR4lHXQtqwykklDfrDdtO0Ia9oGYnpc4F/exec"
-API_TOKEN = "hkjc_private_2026"
-
 
 st.set_page_config(
     page_title="HKJC Football Goal Model",
@@ -14,11 +11,15 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 10A Stable Fixed")
+st.write("Version 10B: Auto Save Bet to Google Sheet")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
 BET_LOG_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQMMbUrTIsjnOdZZrxUf7t8rhMeXeCYCrPu9-lTmHTHnB34sqq7kAlUHpTKcP7VuQ/pub?gid=1909142678&single=true&output=csv"
+
+APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOpCg7z7Mm6PJ1G1fTduYlNFRUase3ZZsqR4lHXQtqwykklDfrDdtO0Ia9oGYnpc4F/exec"
+
+API_TOKEN = "hkjc_private_2026"
 
 NO_TEAM_OPTION = "不用球隊資料，只用聯賽數據"
 
@@ -59,13 +60,7 @@ def prepare_main_data(df):
 
 
 def make_league_list(df, league_col):
-    return sorted(
-        df[league_col]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
-    )
+    return sorted(df[league_col].dropna().astype(str).unique().tolist())
 
 
 def make_team_list(df, home_col, away_col):
@@ -92,10 +87,7 @@ def search_leagues(keyword, league_list):
         if item not in output:
             output.append(item)
 
-    if output:
-        return output
-
-    return league_list
+    return output if output else league_list
 
 
 def similarity(a, b):
@@ -360,394 +352,4 @@ def make_final_decision(league_result, home_result, away_result, line, over_odds
         confidence = "High" if abs(final_over - 0.5) >= 0.10 else "Medium"
         confidence_note = "今次已加入球隊資料。"
 
-    if decision == "No Bet":
-        final_call = "Final Call: No Bet。今場沒有足夠優勢。"
-    elif side == "Over":
-        final_call = f"Final Call: 偏 Over {line}。公平賠率約 {over_fair:.2f}。"
-    elif side == "Under":
-        final_call = f"Final Call: 偏 Under {line}。公平賠率約 {under_fair:.2f}。"
-    else:
-        final_call = "Final Call: No Bet。"
-
-    return {
-        "decision": decision,
-        "side": side,
-        "note": note,
-        "value_note": value_note,
-        "confidence": confidence,
-        "confidence_note": confidence_note,
-        "final_over": final_over,
-        "final_under": final_under,
-        "final_avg": final_avg,
-        "over_fair": over_fair,
-        "under_fair": under_fair,
-        "data_source": data_source,
-        "team_sample": team_sample,
-        "final_call": final_call
-    }
-
-
-def make_bet_log_row(bet_date, league, home, away, line, decision, side, over_odds, under_odds, stake):
-    if side == "Over":
-        odds = over_odds
-    elif side == "Under":
-        odds = under_odds
-    else:
-        odds = 0
-
-    values = [
-        str(bet_date),
-        league,
-        home,
-        away,
-        line,
-        decision,
-        side,
-        odds,
-        stake,
-        "Pending",
-        ""
-    ]
-
-    clean_values = []
-
-    for value in values:
-        text = str(value).replace('"', '""')
-        clean_values.append(f'"{text}"')
-
-    return ",".join(clean_values), odds
-
-
-def prepare_bet_log(df):
-    if df.empty:
-        return df
-
-    df = df.copy()
-    df.columns = [str(c).strip() for c in df.columns]
-
-    if "odds" in df.columns:
-        df["odds"] = pd.to_numeric(df["odds"], errors="coerce").fillna(0)
-
-    if "stake" in df.columns:
-        df["stake"] = pd.to_numeric(df["stake"], errors="coerce").fillna(0)
-
-    if "profit_loss" not in df.columns:
-        df["profit_loss"] = ""
-
-    df["profit_loss"] = pd.to_numeric(df["profit_loss"], errors="coerce")
-
-    if "result" in df.columns and "odds" in df.columns and "stake" in df.columns:
-        calculated = []
-
-        for _, row in df.iterrows():
-            if pd.notna(row.get("profit_loss")):
-                calculated.append(row.get("profit_loss"))
-                continue
-
-            result = str(row.get("result", "")).strip().lower()
-            odds = row.get("odds", 0)
-            stake = row.get("stake", 0)
-
-            if result == "win":
-                calculated.append((odds - 1) * stake)
-            elif result == "lose":
-                calculated.append(-stake)
-            elif result == "push":
-                calculated.append(0)
-            else:
-                calculated.append(0)
-
-        df["profit_loss"] = calculated
-
-    return df
-
-
-def show_bet_log(df):
-    st.subheader("Bet Log Dashboard")
-
-    if df.empty:
-        st.info("Bet Log 暫時未有資料。")
-        return
-
-    df = prepare_bet_log(df)
-
-    total_bets = len(df)
-
-    if "result" in df.columns:
-        wins = (df["result"].astype(str).str.lower() == "win").sum()
-        losses = (df["result"].astype(str).str.lower() == "lose").sum()
-        pushes = (df["result"].astype(str).str.lower() == "push").sum()
-    else:
-        wins = 0
-        losses = 0
-        pushes = 0
-
-    settled = wins + losses
-    hit_rate = wins / settled if settled > 0 else 0
-
-    total_stake = df["stake"].sum() if "stake" in df.columns else 0
-    total_profit = df["profit_loss"].sum() if "profit_loss" in df.columns else 0
-    roi = total_profit / total_stake if total_stake > 0 else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        st.metric("Total Bets", total_bets)
-
-    with c2:
-        st.metric("Hit Rate", f"{hit_rate * 100:.1f}%")
-
-    with c3:
-        st.metric("Profit / Loss", f"{total_profit:.2f}")
-
-    with c4:
-        st.metric("ROI", f"{roi * 100:.1f}%")
-
-    c5, c6, c7 = st.columns(3)
-
-    with c5:
-        st.metric("Win", wins)
-
-    with c6:
-        st.metric("Lose", losses)
-
-    with c7:
-        st.metric("Push", pushes)
-
-    st.dataframe(df, use_container_width=True)
-
-    if "line" in df.columns and "stake" in df.columns and "profit_loss" in df.columns:
-        st.subheader("Performance by Goal Line")
-
-        line_summary = df.groupby("line").agg(
-            bets=("line", "count"),
-            total_stake=("stake", "sum"),
-            profit_loss=("profit_loss", "sum")
-        ).reset_index()
-
-        line_summary["ROI"] = line_summary.apply(
-            lambda row: row["profit_loss"] / row["total_stake"] if row["total_stake"] > 0 else 0,
-            axis=1
-        )
-
-        line_summary["ROI"] = line_summary["ROI"].map(lambda x: f"{x * 100:.1f}%")
-
-        st.dataframe(line_summary, use_container_width=True)
-
-
-st.sidebar.header("Database")
-
-main_url = st.sidebar.text_input("Main Database CSV URL", value=SHEET_CSV_URL)
-bet_log_url = st.sidebar.text_input("Bet Log CSV URL", value=BET_LOG_CSV_URL)
-
-if st.sidebar.button("Refresh database"):
-    st.cache_data.clear()
-
-try:
-    raw_df = load_csv(main_url)
-except Exception as e:
-    st.error(f"讀取主 database 失敗：{e}")
-    st.stop()
-
-try:
-    bet_log_df = load_csv(bet_log_url)
-except Exception:
-    bet_log_df = pd.DataFrame()
-
-df, league_col, home_col, away_col, goals_col, date_col = prepare_main_data(raw_df)
-
-league_list = make_league_list(df, league_col)
-team_list = make_team_list(df, home_col, away_col)
-
-st.success(f"Database loaded successfully. Total rows: {len(df)}")
-
-tab_model, tab_bet_log = st.tabs(["Model", "Bet Log"])
-
-with tab_model:
-    st.sidebar.header("Match Input")
-
-    league_keyword = st.sidebar.text_input("Search League", value="澳洲盃")
-    filtered_leagues = search_leagues(league_keyword, league_list)
-
-    selected_league = st.sidebar.selectbox("Select League", filtered_leagues)
-    line = st.sidebar.selectbox("Goal Line", [1.5, 2.5, 3.5, 4.5], index=2)
-
-    home_input = st.sidebar.text_input("Home Team", value="坎培拉祖雲達斯")
-    away_input = st.sidebar.text_input("Away Team", value="昆比恩城")
-
-    home_choice = st.sidebar.selectbox("Suggested Home Team", get_team_suggestions(home_input, team_list))
-    away_choice = st.sidebar.selectbox("Suggested Away Team", get_team_suggestions(away_input, team_list))
-
-    home_team = extract_team_name(home_choice)
-    away_team = extract_team_name(away_choice)
-
-    st.sidebar.header("Odds Input")
-
-    over_odds = st.sidebar.number_input("Over Odds", min_value=0.00, value=0.00, step=0.01)
-    under_odds = st.sidebar.number_input("Under Odds", min_value=0.00, value=0.00, step=0.01)
-
-    st.sidebar.header("Bet Log Input")
-
-    bet_date = st.sidebar.date_input("Bet Date", value=date.today())
-    stake = st.sidebar.number_input("Stake", min_value=0.00, value=100.00, step=10.00)
-
-    analyse_button = st.sidebar.button("Analyse")
-
-    display_home = home_input if home_team == NO_TEAM_OPTION else home_team
-    display_away = away_input if away_team == NO_TEAM_OPTION else away_team
-
-    st.subheader("Selected Match")
-
-    x1, x2, x3, x4 = st.columns(4)
-
-    with x1:
-        st.write("League")
-        st.info(selected_league)
-
-    with x2:
-        st.write("Goal Line")
-        st.info(str(line))
-
-    with x3:
-        st.write("Home Team")
-        st.info(display_home)
-
-    with x4:
-        st.write("Away Team")
-        st.info(display_away)
-
-    if analyse_button:
-        league_result = analyse_league(df, league_col, goals_col, selected_league, line)
-
-        if league_result is None:
-            st.error("找不到此聯賽資料。")
-            st.stop()
-
-        home_result = analyse_team(df, home_col, away_col, goals_col, home_team, line)
-        away_result = analyse_team(df, home_col, away_col, goals_col, away_team, line)
-
-        trend_rows, signal = analyse_recent_trend(
-            df,
-            league_col,
-            goals_col,
-            date_col,
-            selected_league,
-            line
-        )
-
-        final = make_final_decision(
-            league_result,
-            home_result,
-            away_result,
-            line,
-            over_odds,
-            under_odds,
-            signal
-        )
-
-        st.subheader("Final Call")
-        st.success(final["final_call"])
-
-        a1, a2, a3, a4 = st.columns(4)
-
-        with a1:
-            st.metric("Decision", final["decision"])
-
-        with a2:
-            st.metric(f"Over {line}", f"{final['final_over'] * 100:.1f}%")
-
-        with a3:
-            st.metric(f"Under {line}", f"{final['final_under'] * 100:.1f}%")
-
-        with a4:
-            st.metric("Avg Goals", f"{final['final_avg']:.2f}")
-
-        b1, b2, b3, b4 = st.columns(4)
-
-        with b1:
-            st.metric("Confidence", final["confidence"])
-
-        with b2:
-            st.metric("Data Source", final["data_source"])
-
-        with b3:
-            st.metric("Fair Over Odds", f"{final['over_fair']:.2f}")
-
-        with b4:
-            st.metric("Fair Under Odds", f"{final['under_fair']:.2f}")
-
-        st.subheader("Copy to Bet Log")
-
-        bet_row, chosen_odds = make_bet_log_row(
-            bet_date,
-            selected_league,
-            display_home,
-            display_away,
-            line,
-            final["decision"],
-            final["side"],
-            over_odds,
-            under_odds,
-            stake
-        )
-
-        preview = pd.DataFrame([
-            {
-                "bet_date": str(bet_date),
-                "league_ch": selected_league,
-                "home_team_ch": display_home,
-                "away_team_ch": display_away,
-                "line": line,
-                "model_decision": final["decision"],
-                "bet_side": final["side"],
-                "odds": chosen_odds,
-                "stake": stake,
-                "result": "Pending",
-                "profit_loss": ""
-            }
-        ])
-
-        st.dataframe(preview, use_container_width=True)
-        st.write("Copy this row and paste it into the bottom of your bet_log Google Sheet:")
-        st.code(bet_row, language="csv")
-
-        st.subheader("League Reference")
-
-        league_table = pd.DataFrame([
-            {
-                "League": selected_league,
-                "Matches": league_result["matches"],
-                "Average Goals": round(league_result["avg_goals"], 2),
-                "Median Goals": round(league_result["median_goals"], 2),
-                "Over 1.5": f"{league_result['over_1_5'] * 100:.1f}%",
-                "Over 2.5": f"{league_result['over_2_5'] * 100:.1f}%",
-                "Over 3.5": f"{league_result['over_3_5'] * 100:.1f}%",
-                "Over 4.5": f"{league_result['over_4_5'] * 100:.1f}%"
-            }
-        ])
-
-        st.dataframe(league_table, use_container_width=True)
-
-        st.subheader("Recent Trend")
-
-        if trend_rows:
-            st.dataframe(pd.DataFrame(trend_rows), use_container_width=True)
-            st.info(signal)
-        else:
-            st.warning("沒有近期走勢資料。")
-
-        st.subheader("Reading")
-        st.write(final["note"])
-        st.write(final["confidence_note"])
-        st.write(final["value_note"])
-        st.write(signal)
-
-    else:
-        st.info("Choose a league and goal line, then click Analyse.")
-
-with tab_bet_log:
-    show_bet_log(bet_log_df)
-
-
-with tab_bet_log:
-    show_bet_log(bet_log_df)
+    if decision == "No
