@@ -11,11 +11,11 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 10C: Auto Save Bet + Latest 10 Bet Log")
+st.write("Version 10C Fixed: Auto Save Bet + Correct Bet Log CSV")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
-BET_LOG_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQMMbUrTIsjnOdZZrxUf7t8rhMeXeCYCrPu9-lTmHTHnB34sqq7kAlUHpTKcP7VuQ/pub?gid=1909142678&single=true&output=csv"
+BET_LOG_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRsx-N19kLkdtdL0oSHXFOgCUnH11Hq-Ddm5XpgittBGS0AiSOhco-XzDWA6tu7d6TgiZvxKQUEGC3s/pub?gid=1909142678&single=true&output=csv"
 
 APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOpCg7z7Mm6PJ1G1fTduYlNFRUase3ZZsqR4lHXQtqwykklDfrDdtO0Ia9oGYnpc4F/exec"
 
@@ -34,7 +34,8 @@ if "last_saved_bet" not in st.session_state:
     st.session_state["last_saved_bet"] = None
 
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=60)
+
 def load_csv(url):
     df = pd.read_csv(url)
     df.columns = [str(c).strip() for c in df.columns]
@@ -432,9 +433,8 @@ def save_bet_to_google_sheet(payload):
         try:
             data = response.json()
         except Exception:
-            return False, response.text
-
-        if data.get("ok") is True:
+            return False, {"error": response.text}
+             if data.get("ok") is True:
             return True, data
 
         return False, data
@@ -471,7 +471,10 @@ def remove_blank_bet_rows(df):
     for col in existing_key_cols:
         df[col] = df[col].astype(str).replace("nan", "").str.strip()
 
-    df = df[df[existing_key_cols].apply(lambda row: any(str(x).strip() != "" for x in row), axis=1)]
+    df = df[
+        df[existing_key_cols]
+        .apply(lambda row: any(str(x).strip() != "" for x in row), axis=1)
+    ]
 
     return df
 
