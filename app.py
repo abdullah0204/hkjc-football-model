@@ -277,7 +277,7 @@ selected_away_team = extract_team_name(selected_away_label)
             f"Over {line}": f"{league_result['over_rate'] * 100:.1f}%",
             f"Under {line}": f"{league_result['under_rate'] * 100:.1f}%"
         }
-    ])
+    
 
     st.dataframe(league_table, use_container_width=True)
 
