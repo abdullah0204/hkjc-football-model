@@ -3,6 +3,10 @@ import pandas as pd
 from difflib import get_close_matches, SequenceMatcher
 from datetime import date
 
+APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOpCg7z7Mm6PJ1G1fTduYlNFRUase3ZZsqR4lHXQtqwykklDfrDdtO0Ia9oGYnpc4F/exec"
+API_TOKEN = "hkjc_private_2026"
+
+
 st.set_page_config(
     page_title="HKJC Football Goal Model",
     page_icon="⚽",
