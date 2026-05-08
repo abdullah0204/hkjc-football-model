@@ -11,17 +11,20 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 12A: Recent Form Model + AI Reading")
+st.write("Version 13: Upcoming Match Selector + Recent Form + AI Reading")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
 BET_LOG_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRsx-N19kLkdtdL0oSHXFOgCUnH11Hq-Ddm5XpgittBGS0AiSOhco-XzDWA6tu7d6TgiZvxKQUEGC3s/pub?gid=1909142678&single=true&output=csv"
+
+UPCOMING_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQL4uV8fCNh5wEuweCiffRi0Bq5Xl4kHykQzJrKQldYFjSL-8vO6iMC99A8TI2CDrcR6pZEh4k8tuUY/pub?gid=0&single=true&output=csv"
 
 APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOpCg7z7Mm6PJ1G1fTduYlNFRUase3ZZsqR4lHXQtqwykklDfrDdtO0Ia9oGYnpc4F/exec"
 
 API_TOKEN = "hkjc_private_2026"
 NO_TEAM_OPTION = "不用球隊資料，只用聯賽數據"
 
+SUPPORTED_LINES = [1.5, 2.5, 3.5, 4.5]
 
 if "last_bet_payload" not in st.session_state:
     st.session_state["last_bet_payload"] = None
@@ -91,6 +94,42 @@ def prepare_main_data(df):
     return df, league_col, home_col, away_col, goals_col, home_goals_col, away_goals_col, date_col
 
 
+def prepare_upcoming_data(df):
+    if df.empty:
+        return df
+
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    required_cols = [
+        "match_date",
+        "home_team_ch",
+        "away_team_ch",
+        "line",
+        "over_odds",
+        "under_odds",
+        "stake"
+    ]
+
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = ""
+
+    if "league_ch" not in df.columns:
+        df["league_ch"] = ""
+
+    df["line"] = pd.to_numeric(df["line"], errors="coerce")
+    df["over_odds"] = pd.to_numeric(df["over_odds"], errors="coerce").fillna(0)
+    df["under_odds"] = pd.to_numeric(df["under_odds"], errors="coerce").fillna(0)
+    df["stake"] = pd.to_numeric(df["stake"], errors="coerce").fillna(100)
+
+    df = df.dropna(subset=["line"])
+    df = df[df["home_team_ch"].astype(str).str.strip() != ""]
+    df = df[df["away_team_ch"].astype(str).str.strip() != ""]
+
+    return df
+
+
 def make_league_list(df, league_col):
     return sorted(df[league_col].dropna().astype(str).unique().tolist())
 
@@ -150,14 +189,14 @@ def get_team_suggestions(input_name, team_list):
         elif team_text.lower() in input_name.lower():
             score = max(score, 0.75)
 
-        if score >= 0.45:
+        if score >= 0.35:
             scored.append((team_text, score))
 
     scored = sorted(scored, key=lambda x: x[1], reverse=True)
 
     output = [NO_TEAM_OPTION]
 
-    for team, score in scored[:8]:
+    for team, score in scored[:10]:
         output.append(f"{team} | match {score * 100:.0f}%")
 
     return output
@@ -174,6 +213,79 @@ def extract_team_name(selection):
         return selection.split(" | match ")[0].strip()
 
     return str(selection).strip()
+
+
+def infer_leagues_from_teams(df, league_col, home_col, away_col, home_team, away_team):
+    if not home_team or not away_team:
+        return []
+
+    home_team = str(home_team).strip()
+    away_team = str(away_team).strip()
+
+    exact_df = df[
+        (
+            (df[home_col].astype(str) == home_team) |
+            (df[away_col].astype(str) == home_team)
+        ) &
+        (
+            (df[home_col].astype(str) == away_team) |
+            (df[away_col].astype(str) == away_team)
+        )
+    ].copy()
+
+    if len(exact_df) > 0:
+        return exact_df[league_col].astype(str).value_counts().index.tolist()
+
+    home_df = df[
+        (df[home_col].astype(str) == home_team) |
+        (df[away_col].astype(str) == home_team)
+    ].copy()
+
+    away_df = df[
+        (df[home_col].astype(str) == away_team) |
+        (df[away_col].astype(str) == away_team)
+    ].copy()
+
+    home_leagues = set(home_df[league_col].astype(str).tolist())
+    away_leagues = set(away_df[league_col].astype(str).tolist())
+
+    common = list(home_leagues.intersection(away_leagues))
+
+    if common:
+        league_counts = {}
+
+        for lg in common:
+            league_counts[lg] = (
+                (home_df[league_col].astype(str) == lg).sum() +
+                (away_df[league_col].astype(str) == lg).sum()
+            )
+
+        return sorted(common, key=lambda x: league_counts[x], reverse=True)
+
+    combined = pd.concat([home_df, away_df], ignore_index=True)
+
+    if len(combined) > 0:
+        return combined[league_col].astype(str).value_counts().index.tolist()
+
+    return []
+
+
+def normalise_line(value):
+    try:
+        line = float(value)
+    except Exception:
+        return 2.5
+
+    if line in SUPPORTED_LINES:
+        return line
+
+    if line == 3.0 or line == 3:
+        return 2.5
+
+    if line == 4.0 or line == 4:
+        return 3.5
+
+    return 2.5
 
 
 def analyse_group(group_df, goals_col, line):
@@ -536,7 +648,6 @@ def generate_ai_reading(saved):
     confidence = final["confidence"]
     final_over = final["final_over"]
     final_under = final["final_under"]
-    final_avg = final["final_avg"]
     data_source = final["data_source"]
 
     league_over = league_result["over_rate"]
@@ -584,18 +695,6 @@ def generate_ai_reading(saved):
             f"客隊近 {away_recent['recent_matches']} 場平均總入球為 {format_number(away_recent['recent_avg_total_goals'])}，"
             f"Recent Over {line} 為 {format_percent(away_recent['recent_over_rate'])}。"
         )
-
-    if home_recent and away_recent:
-        recent_avg_mix = (
-            home_recent["recent_avg_total_goals"] + away_recent["recent_avg_total_goals"]
-        ) / 2
-
-        if recent_avg_mix > final_avg + 0.4:
-            reasons.append("兩隊近期入球環境高過模型總平均，對大球有一定支持。")
-        elif recent_avg_mix < final_avg - 0.4:
-            reasons.append("兩隊近期入球環境低過模型總平均，對細球有一定支持。")
-        else:
-            reasons.append("兩隊近期入球環境同模型總平均接近，沒有明顯反向訊號。")
 
     if confidence == "Low":
         risks.append("信心等級偏低，代表樣本或訊號不足，不適合重注。")
@@ -888,6 +987,12 @@ try:
 except Exception:
     bet_log_df = pd.DataFrame()
 
+try:
+    upcoming_df = load_csv(UPCOMING_CSV_URL)
+    upcoming_df = prepare_upcoming_data(upcoming_df)
+except Exception:
+    upcoming_df = pd.DataFrame()
+
 df, league_col, home_col, away_col, goals_col, home_goals_col, away_goals_col, date_col = prepare_main_data(raw_df)
 
 league_list = make_league_list(df, league_col)
@@ -895,46 +1000,144 @@ team_list = make_team_list(df, home_col, away_col)
 
 st.success(f"Main database loaded successfully. Total rows: {len(df)}")
 
+if not upcoming_df.empty:
+    st.info(f"Upcoming matches loaded: {len(upcoming_df)}")
+else:
+    st.warning("Upcoming matches not loaded or empty.")
+
 tab_model, tab_betlog, tab_result = st.tabs(["Model", "Bet Log", "Result Update"])
 
 
 with tab_model:
     st.subheader("Match Input")
 
-    with st.form("model_form"):
-        league_keyword = st.text_input("Search League", value="澳洲盃")
-        filtered_leagues = search_leagues(league_keyword, league_list)
+    input_mode = st.radio(
+        "Input Mode",
+        ["Use Upcoming Match", "Manual Input"],
+        horizontal=True
+    )
 
-        selected_league = st.selectbox("Select League", filtered_leagues)
-        line = st.selectbox("Goal Line", [1.5, 2.5, 3.5, 4.5], index=2)
+    if input_mode == "Use Upcoming Match" and not upcoming_df.empty:
+        labels = []
 
-        recent_n = st.selectbox("Recent Form Matches", [5, 8, 10, 15], index=2)
+        for i, row in upcoming_df.iterrows():
+            label = (
+                f"{i + 1}. {row.get('match_date', '')} | "
+                f"{row.get('home_team_ch', '')} vs {row.get('away_team_ch', '')} | "
+                f"Line {row.get('line', '')} | "
+                f"O {row.get('over_odds', '')} / U {row.get('under_odds', '')}"
+            )
+            labels.append(label)
 
-        home_input = st.text_input("Home Team", value="坎培拉祖雲達斯")
-        away_input = st.text_input("Away Team", value="昆比恩城")
+        selected_match_label = st.selectbox("Select Upcoming Match", labels)
+        selected_index = labels.index(selected_match_label)
+        selected_match = upcoming_df.iloc[selected_index]
 
-        home_choice = st.selectbox("Suggested Home Team", get_team_suggestions(home_input, team_list))
-        away_choice = st.selectbox("Suggested Away Team", get_team_suggestions(away_input, team_list))
+        default_home = str(selected_match.get("home_team_ch", "")).strip()
+        default_away = str(selected_match.get("away_team_ch", "")).strip()
+        default_line = normalise_line(selected_match.get("line", 2.5))
+        default_over_odds = float(selected_match.get("over_odds", 0))
+        default_under_odds = float(selected_match.get("under_odds", 0))
+        default_stake = float(selected_match.get("stake", 100))
+        default_bet_date = str(selected_match.get("match_date", date.today()))
+
+        st.write("Upcoming match selected:")
+        st.dataframe(pd.DataFrame([selected_match]), use_container_width=True)
+
+        home_choice = st.selectbox(
+            "Suggested Home Team",
+            get_team_suggestions(default_home, team_list),
+            key="up_home_choice"
+        )
+
+        away_choice = st.selectbox(
+            "Suggested Away Team",
+            get_team_suggestions(default_away, team_list),
+            key="up_away_choice"
+        )
 
         home_team = extract_team_name(home_choice)
         away_team = extract_team_name(away_choice)
 
-        over_odds = st.number_input("Over Odds", min_value=0.00, value=0.00, step=0.01)
-        under_odds = st.number_input("Under Odds", min_value=0.00, value=0.00, step=0.01)
+        display_home = default_home if home_team == NO_TEAM_OPTION else home_team
+        display_away = default_away if away_team == NO_TEAM_OPTION else away_team
 
-        bet_date = st.date_input("Bet Date", value=date.today())
-        stake = st.number_input("Stake", min_value=0.00, value=100.00, step=10.00)
+        suggested_leagues = infer_leagues_from_teams(
+            df,
+            league_col,
+            home_col,
+            away_col,
+            display_home,
+            display_away
+        )
 
-        analyse_button = st.form_submit_button("Analyse")
+        raw_league = str(selected_match.get("league_ch", "")).strip()
+
+        if raw_league and raw_league in league_list:
+            suggested_leagues = [raw_league] + [x for x in suggested_leagues if x != raw_league]
+
+        if not suggested_leagues:
+            suggested_leagues = league_list
+
+        selected_league = st.selectbox("Suggested League", suggested_leagues)
+
+        with st.form("upcoming_form"):
+            line = st.selectbox(
+                "Goal Line",
+                SUPPORTED_LINES,
+                index=SUPPORTED_LINES.index(default_line) if default_line in SUPPORTED_LINES else 1
+            )
+
+            recent_n = st.selectbox("Recent Form Matches", [5, 8, 10, 15], index=2)
+
+            over_odds = st.number_input("Over Odds", min_value=0.00, value=default_over_odds, step=0.01)
+            under_odds = st.number_input("Under Odds", min_value=0.00, value=default_under_odds, step=0.01)
+
+            try:
+                bet_date_value = pd.to_datetime(default_bet_date).date()
+            except Exception:
+                bet_date_value = date.today()
+
+            bet_date = st.date_input("Bet Date", value=bet_date_value)
+            stake = st.number_input("Stake", min_value=0.00, value=default_stake, step=10.00)
+
+            analyse_button = st.form_submit_button("Analyse")
+
+    else:
+        with st.form("manual_form"):
+            league_keyword = st.text_input("Search League", value="澳洲盃")
+            filtered_leagues = search_leagues(league_keyword, league_list)
+
+            selected_league = st.selectbox("Select League", filtered_leagues)
+            line = st.selectbox("Goal Line", SUPPORTED_LINES, index=2)
+
+            recent_n = st.selectbox("Recent Form Matches", [5, 8, 10, 15], index=2)
+
+            home_input = st.text_input("Home Team", value="坎培拉祖雲達斯")
+            away_input = st.text_input("Away Team", value="昆比恩城")
+
+            home_choice = st.selectbox("Suggested Home Team", get_team_suggestions(home_input, team_list))
+            away_choice = st.selectbox("Suggested Away Team", get_team_suggestions(away_input, team_list))
+
+            home_team = extract_team_name(home_choice)
+            away_team = extract_team_name(away_choice)
+
+            display_home = home_input if home_team == NO_TEAM_OPTION else home_team
+            display_away = away_input if away_team == NO_TEAM_OPTION else away_team
+
+            over_odds = st.number_input("Over Odds", min_value=0.00, value=0.00, step=0.01)
+            under_odds = st.number_input("Under Odds", min_value=0.00, value=0.00, step=0.01)
+
+            bet_date = st.date_input("Bet Date", value=date.today())
+            stake = st.number_input("Stake", min_value=0.00, value=100.00, step=10.00)
+
+            analyse_button = st.form_submit_button("Analyse")
 
     if analyse_button:
-        display_home = home_input if home_team == NO_TEAM_OPTION else home_team
-        display_away = away_input if away_team == NO_TEAM_OPTION else away_team
-
         league_result = analyse_league(df, league_col, goals_col, selected_league, line)
 
         if league_result is None:
-            st.error("找不到此聯賽資料。")
+            st.error("找不到此聯賽資料。請改選 Suggested League。")
         else:
             home_result = analyse_team(df, home_col, away_col, goals_col, home_team, line)
             away_result = analyse_team(df, home_col, away_col, goals_col, away_team, line)
@@ -1169,7 +1372,7 @@ with tab_model:
         st.write(final["value_note"])
         st.write(signal)
     else:
-        st.info("先輸入資料，然後按 Analyse。")
+        st.info("先選 upcoming match 或手動輸入，然後按 Analyse。")
 
 
 with tab_betlog:
