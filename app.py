@@ -2431,19 +2431,3 @@ with tab_model:
 
 with tab_bet_log:
     show_bet_log_dashboard(bet_log_df)
-
-On Fri, May 8, 2026 at 9:20 AM AS Ismail Sheik Abdullah <as2@learn.iktmc.edu.hk> wrote:
-import streamlit as st
-import pandas as pd
-from difflib import get_close_matches, SequenceMatcher
-
-st.set_page_config(
-    page_title="HKJC Football Goal Model",
-    page_icon="⚽",
-    layout="wide"
-)
-
-st.title("HKJC Football Goal Model")
-st.write("Version 9 Fixed: Goal model + Google Sheet database + Bet Log dashboard")
-
-SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-
