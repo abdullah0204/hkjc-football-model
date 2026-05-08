@@ -434,7 +434,8 @@ def save_bet_to_google_sheet(payload):
             data = response.json()
         except Exception:
             return False, {"error": response.text}
-             if data.get("ok") is True:
+
+        if data.get("ok") is True:
             return True, data
 
         return False, data
