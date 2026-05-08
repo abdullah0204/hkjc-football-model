@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 10B: Auto Save Bet to Google Sheet")
+st.write("Version 10B Fixed: Auto Save Bet to Google Sheet")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
@@ -22,6 +22,12 @@ APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOpCg7z7Mm6PJ1G1fTdu
 API_TOKEN = "hkjc_private_2026"
 
 NO_TEAM_OPTION = "不用球隊資料，只用聯賽數據"
+
+if "last_bet_payload" not in st.session_state:
+    st.session_state["last_bet_payload"] = None
+
+if "last_bet_preview" not in st.session_state:
+    st.session_state["last_bet_preview"] = None
 
 
 @st.cache_data(ttl=300)
@@ -60,7 +66,13 @@ def prepare_main_data(df):
 
 
 def make_league_list(df, league_col):
-    return sorted(df[league_col].dropna().astype(str).unique().tolist())
+    return sorted(
+        df[league_col]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
 
 
 def make_team_list(df, home_col, away_col):
@@ -654,6 +666,38 @@ with tab_model:
             signal
         )
 
+        payload, chosen_odds = make_bet_payload(
+            bet_date,
+            selected_league,
+            display_home,
+            display_away,
+            line,
+            final["decision"],
+            final["side"],
+            over_odds,
+            under_odds,
+            stake
+        )
+
+        preview = pd.DataFrame([
+            {
+                "bet_date": payload["bet_date"],
+                "league_ch": payload["league_ch"],
+                "home_team_ch": payload["home_team_ch"],
+                "away_team_ch": payload["away_team_ch"],
+                "line": payload["line"],
+                "model_decision": payload["model_decision"],
+                "bet_side": payload["bet_side"],
+                "odds": payload["odds"],
+                "stake": payload["stake"],
+                "result": payload["result"],
+                "profit_loss": payload["profit_loss"]
+            }
+        ])
+
+        st.session_state["last_bet_payload"] = payload
+        st.session_state["last_bet_preview"] = preview
+
         st.subheader("Final Call")
         st.success(final["final_call"])
 
@@ -685,47 +729,9 @@ with tab_model:
         with b4:
             st.metric("Fair Under Odds", f"{final['under_fair']:.2f}")
 
-        st.subheader("Save Bet to Google Sheet")
-
-        payload, chosen_odds = make_bet_payload(
-            bet_date,
-            selected_league,
-            display_home,
-            display_away,
-            line,
-            final["decision"],
-            final["side"],
-            over_odds,
-            under_odds,
-            stake
-        )
-
-        preview = pd.DataFrame([
-            {
-                "bet_date": payload["bet_date"],
-                "league_ch": payload["league_ch"],
-                "home_team_ch": payload["home_team_ch"],
-                "away_team_ch": payload["away_team_ch"],
-                "line": payload["line"],
-                "model_decision": payload["model_decision"],
-                "bet_side": payload["bet_side"],
-                "odds": payload["odds"],
-                "stake": payload["stake"],
-                "result": payload["result"],
-                "profit_loss": payload["profit_loss"]
-            }
-        ])
-
+        st.subheader("Save Bet Preview")
         st.dataframe(preview, use_container_width=True)
-
-        if st.button("Save Bet"):
-            ok, message = save_bet_to_google_sheet(payload)
-
-            if ok:
-                st.success("Bet saved successfully. Wait a few seconds, then click Refresh database.")
-                st.cache_data.clear()
-            else:
-                st.error(f"Save failed: {message}")
+        st.info("分析完成。請按下面 Save Bet to Google Sheet。")
 
         st.subheader("League Reference")
 
@@ -760,6 +766,21 @@ with tab_model:
 
     else:
         st.info("Choose a league and goal line, then click Analyse.")
+
+    if st.session_state.get("last_bet_payload") is not None:
+        st.subheader("Confirm Save Bet")
+
+        if st.session_state.get("last_bet_preview") is not None:
+            st.dataframe(st.session_state["last_bet_preview"], use_container_width=True)
+
+        if st.button("Save Bet to Google Sheet"):
+            ok, message = save_bet_to_google_sheet(st.session_state["last_bet_payload"])
+
+            if ok:
+                st.success("Bet saved successfully. Wait a few seconds, then click Refresh database.")
+                st.cache_data.clear()
+            else:
+                st.error(f"Save failed: {message}")
 
 with tab_bet_log:
     show_bet_log(bet_log_df)
