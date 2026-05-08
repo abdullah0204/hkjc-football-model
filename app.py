@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 12: Stable Save Bet + Result Update + Recent Form Model")
+st.write("Version 12A: Recent Form Model + AI Reading")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
@@ -21,6 +21,7 @@ APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOpCg7z7Mm6PJ1G1fTdu
 
 API_TOKEN = "hkjc_private_2026"
 NO_TEAM_OPTION = "不用球隊資料，只用聯賽數據"
+
 
 if "last_bet_payload" not in st.session_state:
     st.session_state["last_bet_payload"] = None
@@ -275,11 +276,8 @@ def analyse_recent_team_form(
                 goals_for.append(row[away_goals_col])
                 goals_against.append(row[home_goals_col])
 
-        goals_for_series = pd.Series(goals_for)
-        goals_against_series = pd.Series(goals_against)
-
-        result["recent_goals_for"] = goals_for_series.mean()
-        result["recent_goals_against"] = goals_against_series.mean()
+        result["recent_goals_for"] = pd.Series(goals_for).mean()
+        result["recent_goals_against"] = pd.Series(goals_against).mean()
     else:
         result["recent_goals_for"] = None
         result["recent_goals_against"] = None
@@ -509,6 +507,164 @@ def make_final_decision(
         "recent_sample": recent_sample,
         "final_call": final_call
     }
+
+
+def format_percent(value):
+    try:
+        return f"{value * 100:.1f}%"
+    except Exception:
+        return "N/A"
+
+
+def format_number(value):
+    try:
+        return f"{value:.2f}"
+    except Exception:
+        return "N/A"
+
+
+def generate_ai_reading(saved):
+    final = saved["final"]
+    league_result = saved["league_result"]
+    home_recent = saved.get("home_recent", None)
+    away_recent = saved.get("away_recent", None)
+    signal = saved.get("signal", "")
+    line = saved["line"]
+
+    decision = final["decision"]
+    side = final["side"]
+    confidence = final["confidence"]
+    final_over = final["final_over"]
+    final_under = final["final_under"]
+    final_avg = final["final_avg"]
+    data_source = final["data_source"]
+
+    league_over = league_result["over_rate"]
+    league_avg = league_result["avg_goals"]
+    league_median = league_result["median_goals"]
+    league_matches = league_result["matches"]
+
+    reasons = []
+    risks = []
+
+    if side == "Over":
+        model_direction = f"模型方向偏向 Over {line}"
+    elif side == "Under":
+        model_direction = f"模型方向偏向 Under {line}"
+    else:
+        model_direction = "模型方向係 No Bet"
+
+    reasons.append(
+        f"模型最終 Over {line} 機率為 {format_percent(final_over)}，Under {line} 機率為 {format_percent(final_under)}。"
+    )
+
+    reasons.append(
+        f"聯賽樣本有 {league_matches} 場，平均入球 {format_number(league_avg)}，中位數 {format_number(league_median)}。"
+    )
+
+    reasons.append(
+        f"該聯賽在 {line} 線的 Over 比率為 {format_percent(league_over)}。"
+    )
+
+    if "升溫" in signal:
+        reasons.append("近期聯賽走勢有升溫跡象，所以模型略為提高入球預期。")
+    elif "降溫" in signal:
+        reasons.append("近期聯賽走勢有降溫跡象，所以模型略為降低入球預期。")
+    else:
+        reasons.append("近期聯賽走勢接近長期平均，沒有明顯升溫或降溫。")
+
+    if home_recent:
+        reasons.append(
+            f"主隊近 {home_recent['recent_matches']} 場平均總入球為 {format_number(home_recent['recent_avg_total_goals'])}，"
+            f"Recent Over {line} 為 {format_percent(home_recent['recent_over_rate'])}。"
+        )
+
+    if away_recent:
+        reasons.append(
+            f"客隊近 {away_recent['recent_matches']} 場平均總入球為 {format_number(away_recent['recent_avg_total_goals'])}，"
+            f"Recent Over {line} 為 {format_percent(away_recent['recent_over_rate'])}。"
+        )
+
+    if home_recent and away_recent:
+        recent_avg_mix = (
+            home_recent["recent_avg_total_goals"] + away_recent["recent_avg_total_goals"]
+        ) / 2
+
+        if recent_avg_mix > final_avg + 0.4:
+            reasons.append("兩隊近期入球環境高過模型總平均，對大球有一定支持。")
+        elif recent_avg_mix < final_avg - 0.4:
+            reasons.append("兩隊近期入球環境低過模型總平均，對細球有一定支持。")
+        else:
+            reasons.append("兩隊近期入球環境同模型總平均接近，沒有明顯反向訊號。")
+
+    if confidence == "Low":
+        risks.append("信心等級偏低，代表樣本或訊號不足，不適合重注。")
+
+    if line in [3.5, 4.5]:
+        risks.append(f"{line} 線本身波動較大，即使模型方向正確，都應該控制注碼。")
+
+    if side == "None" or "No Bet" in decision:
+        risks.append("模型未見足夠優勢，強行下注容易受單場波動影響。")
+
+    if final["value_note"]:
+        risks.append(final["value_note"])
+
+    if home_recent is None or away_recent is None:
+        risks.append("其中一隊近期資料不足，模型仍然有盲點。")
+
+    if side == "Over":
+        if confidence == "High":
+            final_view = f"Final View：可以考慮 Over {line}，但仍應以正常注碼處理。"
+        elif confidence == "Medium":
+            final_view = f"Final View：可以小注考慮 Over {line}，不建議重注或串關。"
+        else:
+            final_view = f"Final View：方向偏 Over {line}，但信心不足，建議觀察或極小注。"
+    elif side == "Under":
+        if confidence == "High":
+            final_view = f"Final View：可以考慮 Under {line}，但要留意臨場盤口變化。"
+        elif confidence == "Medium":
+            final_view = f"Final View：可以小注考慮 Under {line}，不建議放入大型串關。"
+        else:
+            final_view = f"Final View：方向偏 Under {line}，但信心不足，建議保守處理。"
+    else:
+        final_view = "Final View：今場建議 No Bet。模型沒有給出足夠清晰優勢。"
+
+    return {
+        "model_direction": model_direction,
+        "risk_level": confidence,
+        "data_source": data_source,
+        "main_reasons": reasons,
+        "risks": risks,
+        "final_view": final_view
+    }
+
+
+def show_ai_reading(saved):
+    ai = generate_ai_reading(saved)
+
+    st.subheader("AI Reading")
+
+    st.info(ai["model_direction"])
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.metric("AI Risk Level", ai["risk_level"])
+
+    with c2:
+        st.metric("Data Source", ai["data_source"])
+
+    st.write("Main Reasons")
+
+    for reason in ai["main_reasons"]:
+        st.write(f"- {reason}")
+
+    st.write("Risk Notes")
+
+    for risk in ai["risks"]:
+        st.write(f"- {risk}")
+
+    st.success(ai["final_view"])
 
 
 def make_bet_payload(bet_date, league, home, away, line, decision, side, over_odds, under_odds, stake):
@@ -880,8 +1036,8 @@ with tab_model:
         saved = st.session_state["last_analysis"]
         final = saved["final"]
         league_result = saved["league_result"]
-        home_recent = saved["home_recent"]
-        away_recent = saved["away_recent"]
+        home_recent = saved.get("home_recent", None)
+        away_recent = saved.get("away_recent", None)
         trend_rows = saved["trend_rows"]
         signal = saved["signal"]
 
@@ -931,6 +1087,8 @@ with tab_model:
 
         with m8:
             st.metric("Fair Under Odds", f"{final['under_fair']:.2f}")
+
+        show_ai_reading(saved)
 
         st.subheader("Recent Form Reference")
 
