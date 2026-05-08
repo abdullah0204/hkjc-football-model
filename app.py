@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 from difflib import get_close_matches, SequenceMatcher
-from datetime import date
+from datetime import date, datetime
 
 st.set_page_config(
     page_title="HKJC Football Goal Model",
@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 10B Fixed: Auto Save Bet to Google Sheet")
+st.write("Version 10C: Auto Save Bet + Latest 10 Bet Log")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
@@ -23,14 +23,18 @@ API_TOKEN = "hkjc_private_2026"
 
 NO_TEAM_OPTION = "不用球隊資料，只用聯賽數據"
 
+
 if "last_bet_payload" not in st.session_state:
     st.session_state["last_bet_payload"] = None
 
 if "last_bet_preview" not in st.session_state:
     st.session_state["last_bet_preview"] = None
 
+if "last_saved_bet" not in st.session_state:
+    st.session_state["last_saved_bet"] = None
 
-@st.cache_data(ttl=300)
+
+@st.cache_data(ttl=120)
 def load_csv(url):
     df = pd.read_csv(url)
     df.columns = [str(c).strip() for c in df.columns]
@@ -431,26 +435,64 @@ def save_bet_to_google_sheet(payload):
             return False, response.text
 
         if data.get("ok") is True:
-            return True, data.get("message", "Saved")
+            return True, data
 
-        return False, data.get("error", "Unknown error")
+        return False, data
 
     except Exception as e:
-        return False, str(e)
+        return False, {"error": str(e)}
 
 
-def prepare_bet_log(df):
+def remove_blank_bet_rows(df):
     if df.empty:
         return df
 
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
+    key_cols = [
+        "bet_date",
+        "league_ch",
+        "home_team_ch",
+        "away_team_ch",
+        "line",
+        "model_decision",
+        "bet_side",
+        "odds",
+        "stake",
+        "result"
+    ]
+
+    existing_key_cols = [c for c in key_cols if c in df.columns]
+
+    if not existing_key_cols:
+        return df
+
+    for col in existing_key_cols:
+        df[col] = df[col].astype(str).replace("nan", "").str.strip()
+
+    df = df[df[existing_key_cols].apply(lambda row: any(str(x).strip() != "" for x in row), axis=1)]
+
+    return df
+
+
+def prepare_bet_log(df):
+    if df.empty:
+        return df
+
+    df = remove_blank_bet_rows(df)
+
+    if df.empty:
+        return df
+
     if "odds" in df.columns:
         df["odds"] = pd.to_numeric(df["odds"], errors="coerce").fillna(0)
 
     if "stake" in df.columns:
         df["stake"] = pd.to_numeric(df["stake"], errors="coerce").fillna(0)
+
+    if "line" in df.columns:
+        df["line"] = pd.to_numeric(df["line"], errors="coerce")
 
     if "profit_loss" not in df.columns:
         df["profit_loss"] = ""
@@ -486,11 +528,19 @@ def prepare_bet_log(df):
 def show_bet_log(df):
     st.subheader("Bet Log Dashboard")
 
+    if st.button("Reload Bet Log Now"):
+        st.cache_data.clear()
+        st.rerun()
+
     if df.empty:
         st.info("Bet Log 暫時未有資料。")
         return
 
     df = prepare_bet_log(df)
+
+    if df.empty:
+        st.info("Bet Log 暫時未有有效資料。")
+        return
 
     total_bets = len(df)
 
@@ -535,6 +585,11 @@ def show_bet_log(df):
     with c7:
         st.metric("Push", pushes)
 
+    st.subheader("Latest 10 Bets")
+    latest_10 = df.tail(10).iloc[::-1]
+    st.dataframe(latest_10, use_container_width=True)
+
+    st.subheader("Full Bet Log")
     st.dataframe(df, use_container_width=True)
 
     if "line" in df.columns and "stake" in df.columns and "profit_loss" in df.columns:
@@ -563,6 +618,7 @@ bet_log_url = st.sidebar.text_input("Bet Log CSV URL", value=BET_LOG_CSV_URL)
 
 if st.sidebar.button("Refresh database"):
     st.cache_data.clear()
+    st.rerun()
 
 try:
     raw_df = load_csv(main_url)
@@ -777,10 +833,22 @@ with tab_model:
             ok, message = save_bet_to_google_sheet(st.session_state["last_bet_payload"])
 
             if ok:
-                st.success("Bet saved successfully. Wait a few seconds, then click Refresh database.")
+                saved_payload = st.session_state["last_bet_payload"].copy()
+                saved_payload["saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                saved_payload["script_response"] = str(message)
+
+                st.session_state["last_saved_bet"] = saved_payload
+
+                st.success("Bet saved successfully. Google Sheet 已寫入。")
                 st.cache_data.clear()
             else:
                 st.error(f"Save failed: {message}")
+
+    if st.session_state.get("last_saved_bet") is not None:
+        st.subheader("Latest Saved Bet This Session")
+        saved_df = pd.DataFrame([st.session_state["last_saved_bet"]])
+        st.dataframe(saved_df, use_container_width=True)
+        st.info("如果 Bet Log 分頁未即時更新，等 1 至 5 分鐘，然後按 Refresh database 或 Reload Bet Log Now。")
 
 with tab_bet_log:
     show_bet_log(bet_log_df)
