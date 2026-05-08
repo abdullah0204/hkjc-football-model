@@ -9,18 +9,23 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 6: League + optional team data + recent trend + odds value check")
+st.write("Version 7: Google Sheet database + recent trend + odds value check")
+
+SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
 DEFAULT_FILE = "hkjc_FINAL_2years_model_ready.xlsx"
 NO_TEAM_OPTION = "不用球隊資料，只用聯賽數據"
 
 
-@st.cache_data
-def load_excel(file_path):
-    try:
-        df = pd.read_excel(file_path, sheet_name="Model_Input")
-    except Exception:
-        df = pd.read_excel(file_path, sheet_name="Raw_Data")
+@st.cache_data(ttl=300)
+def load_database(sheet_csv_url):
+    if sheet_csv_url:
+        df = pd.read_csv(sheet_csv_url)
+    else:
+        try:
+            df = pd.read_excel(DEFAULT_FILE, sheet_name="Model_Input")
+        except Exception:
+            df = pd.read_excel(DEFAULT_FILE, sheet_name="Raw_Data")
 
     df.columns = [str(c).strip() for c in df.columns]
     return df
@@ -41,11 +46,19 @@ def prepare_data(df):
     date_col = find_column(df, ["match_date", "kick_off_time", "date"])
 
     if league_col is None or home_col is None or away_col is None or goals_col is None:
-        st.error("Excel 欄位不完整。需要 league, home team, away team, ft_total_goals。")
+        st.error("資料欄位不完整。需要 league, home team, away team, ft_total_goals。")
         st.stop()
 
     df = df.copy()
+
     df[goals_col] = pd.to_numeric(df[goals_col], errors="coerce")
+
+    if "ft_home_goals" in df.columns:
+        df["ft_home_goals"] = pd.to_numeric(df["ft_home_goals"], errors="coerce")
+
+    if "ft_away_goals" in df.columns:
+        df["ft_away_goals"] = pd.to_numeric(df["ft_away_goals"], errors="coerce")
+
     df = df.dropna(subset=[goals_col])
 
     if date_col:
@@ -57,13 +70,11 @@ def prepare_data(df):
 def get_all_teams(df, home_col, away_col):
     home_teams = df[home_col].dropna().astype(str).tolist()
     away_teams = df[away_col].dropna().astype(str).tolist()
-    teams = sorted(list(set(home_teams + away_teams)))
-    return teams
+    return sorted(list(set(home_teams + away_teams)))
 
 
 def get_all_leagues(df, league_col):
-    leagues = sorted(df[league_col].dropna().astype(str).unique().tolist())
-    return leagues
+    return sorted(df[league_col].dropna().astype(str).unique().tolist())
 
 
 def search_leagues(keyword, league_list):
@@ -84,10 +95,7 @@ def search_leagues(keyword, league_list):
         if league not in combined:
             combined.append(league)
 
-    if combined:
-        return combined
-
-    return league_list
+    return combined if combined else league_list
 
 
 def suggest_team_names(input_name, team_list):
@@ -176,10 +184,9 @@ def analyse_recent_trend(df, league_col, goals_col, date_col, selected_league, l
 
     latest_date = league_df[date_col].max()
 
-    windows = [30, 90, 180]
     rows = []
 
-    for days in windows:
+    for days in [30, 90, 180]:
         start_date = latest_date - pd.Timedelta(days=days)
         recent_df = league_df[league_df[date_col] >= start_date]
 
@@ -237,8 +244,10 @@ def make_decision(league_result, home_result, away_result, line, over_odds, unde
     league_avg = league_result["avg_goals"]
 
     team_results = []
+
     if home_result:
         team_results.append(home_result)
+
     if away_result:
         team_results.append(away_result)
 
@@ -352,10 +361,20 @@ def make_decision(league_result, home_result, away_result, line, over_odds, unde
     }
 
 
+st.sidebar.header("Database")
+
+sheet_url_input = st.sidebar.text_input(
+    "Google Sheet CSV URL",
+    value=SHEET_CSV_URL
+)
+
+if st.sidebar.button("Refresh database"):
+    st.cache_data.clear()
+
 try:
-    df = load_excel(DEFAULT_FILE)
+    df = load_database(sheet_url_input)
 except Exception as e:
-    st.error(f"讀取 Excel 失敗：{e}")
+    st.error(f"讀取 database 失敗：{e}")
     st.stop()
 
 df, league_col, home_col, away_col, goals_col, date_col = prepare_data(df)
@@ -363,7 +382,7 @@ df, league_col, home_col, away_col, goals_col, date_col = prepare_data(df)
 team_list = get_all_teams(df, home_col, away_col)
 league_list = get_all_leagues(df, league_col)
 
-st.success("Excel loaded successfully.")
+st.success(f"Database loaded successfully. Total rows: {len(df)}")
 
 st.sidebar.header("Match Input")
 
