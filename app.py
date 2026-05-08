@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 11 Fixed: Stable Save Bet + Result Update")
+st.write("Version 12: Stable Save Bet + Result Update + Recent Form Model")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
@@ -51,6 +51,23 @@ def prepare_main_data(df):
     home_col = find_column(df, ["home_team_ch", "home_team_en"])
     away_col = find_column(df, ["away_team_ch", "away_team_en"])
     goals_col = find_column(df, ["ft_total_goals", "total_goals"])
+
+    home_goals_col = find_column(df, [
+        "ft_home_goals",
+        "home_goals",
+        "home_score",
+        "ft_home_score",
+        "home_ft_goals"
+    ])
+
+    away_goals_col = find_column(df, [
+        "ft_away_goals",
+        "away_goals",
+        "away_score",
+        "ft_away_score",
+        "away_ft_goals"
+    ])
+
     date_col = find_column(df, ["match_date", "kick_off_time", "date"])
 
     if league_col is None or home_col is None or away_col is None or goals_col is None:
@@ -61,10 +78,16 @@ def prepare_main_data(df):
     df[goals_col] = pd.to_numeric(df[goals_col], errors="coerce")
     df = df.dropna(subset=[goals_col])
 
+    if home_goals_col:
+        df[home_goals_col] = pd.to_numeric(df[home_goals_col], errors="coerce")
+
+    if away_goals_col:
+        df[away_goals_col] = pd.to_numeric(df[away_goals_col], errors="coerce")
+
     if date_col:
         df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
 
-    return df, league_col, home_col, away_col, goals_col, date_col
+    return df, league_col, home_col, away_col, goals_col, home_goals_col, away_goals_col, date_col
 
 
 def make_league_list(df, league_col):
@@ -195,6 +218,75 @@ def analyse_team(df, home_col, away_col, goals_col, team_name, line):
     return result
 
 
+def analyse_recent_team_form(
+    df,
+    home_col,
+    away_col,
+    goals_col,
+    home_goals_col,
+    away_goals_col,
+    date_col,
+    team_name,
+    line,
+    recent_n
+):
+    if not team_name or team_name == NO_TEAM_OPTION:
+        return None
+
+    team_df = df[
+        (df[home_col].astype(str) == team_name) |
+        (df[away_col].astype(str) == team_name)
+    ].copy()
+
+    if len(team_df) == 0:
+        return None
+
+    if date_col:
+        team_df = team_df.dropna(subset=[date_col])
+        team_df = team_df.sort_values(date_col)
+
+    team_df = team_df.tail(recent_n).copy()
+
+    if len(team_df) == 0:
+        return None
+
+    over_rate = (team_df[goals_col] > line).mean()
+
+    result = {
+        "team": team_name,
+        "recent_matches": len(team_df),
+        "recent_avg_total_goals": team_df[goals_col].mean(),
+        "recent_median_total_goals": team_df[goals_col].median(),
+        "recent_over_rate": over_rate,
+        "recent_under_rate": 1 - over_rate
+    }
+
+    if home_goals_col and away_goals_col:
+        goals_for = []
+        goals_against = []
+
+        for _, row in team_df.iterrows():
+            is_home = str(row[home_col]) == str(team_name)
+
+            if is_home:
+                goals_for.append(row[home_goals_col])
+                goals_against.append(row[away_goals_col])
+            else:
+                goals_for.append(row[away_goals_col])
+                goals_against.append(row[home_goals_col])
+
+        goals_for_series = pd.Series(goals_for)
+        goals_against_series = pd.Series(goals_against)
+
+        result["recent_goals_for"] = goals_for_series.mean()
+        result["recent_goals_against"] = goals_against_series.mean()
+    else:
+        result["recent_goals_for"] = None
+        result["recent_goals_against"] = None
+
+    return result
+
+
 def analyse_recent_trend(df, league_col, goals_col, date_col, selected_league, line):
     if date_col is None:
         return [], "沒有足夠日期資料判斷近期走勢。"
@@ -287,7 +379,17 @@ def decide_line(line, final_over, final_avg):
     return "No Bet", "None", "不支援此盤口。"
 
 
-def make_final_decision(league_result, home_result, away_result, line, over_odds, under_odds, signal):
+def make_final_decision(
+    league_result,
+    home_result,
+    away_result,
+    home_recent,
+    away_recent,
+    line,
+    over_odds,
+    under_odds,
+    signal
+):
     league_over = league_result["over_rate"]
     league_avg = league_result["avg_goals"]
 
@@ -308,7 +410,28 @@ def make_final_decision(league_result, home_result, away_result, line, over_odds
         team_over = None
         team_avg = None
 
-    if team_over is not None and team_sample >= 10:
+    recent_results = []
+
+    if home_recent and home_recent["recent_matches"] >= 3:
+        recent_results.append(home_recent)
+
+    if away_recent and away_recent["recent_matches"] >= 3:
+        recent_results.append(away_recent)
+
+    if len(recent_results) > 0:
+        recent_sample = sum(r["recent_matches"] for r in recent_results)
+        recent_over = sum(r["recent_over_rate"] for r in recent_results) / len(recent_results)
+        recent_avg = sum(r["recent_avg_total_goals"] for r in recent_results) / len(recent_results)
+    else:
+        recent_sample = 0
+        recent_over = None
+        recent_avg = None
+
+    if team_over is not None and recent_over is not None:
+        final_over = league_over * 0.50 + team_over * 0.25 + recent_over * 0.25
+        final_avg = league_avg * 0.50 + team_avg * 0.25 + recent_avg * 0.25
+        data_source = "League 50% + Team 25% + Recent Form 25%"
+    elif team_over is not None:
         final_over = league_over * 0.65 + team_over * 0.35
         final_avg = league_avg * 0.65 + team_avg * 0.35
         data_source = "League + Team"
@@ -350,15 +473,15 @@ def make_final_decision(league_result, home_result, away_result, line, over_odds
             decision = "No Bet"
             side = "None"
 
-    if team_sample == 0:
-        confidence = "Medium" if abs(final_over - 0.5) >= 0.08 else "Low"
-        confidence_note = "今次只用聯賽數據，沒有使用球隊資料。"
-    elif team_sample < 10:
-        confidence = "Low"
-        confidence_note = "球隊樣本太少，主要仍以聯賽數據判斷。"
-    else:
+    if recent_sample >= 10 and team_sample >= 10:
         confidence = "High" if abs(final_over - 0.5) >= 0.10 else "Medium"
-        confidence_note = "今次已加入球隊資料。"
+        confidence_note = "今次已加入近期狀態，模型比舊版更貼近今場。"
+    elif team_sample >= 10:
+        confidence = "Medium"
+        confidence_note = "近期樣本不足，主要以聯賽及球隊長期數據判斷。"
+    else:
+        confidence = "Low"
+        confidence_note = "球隊或近期樣本不足，主要以聯賽數據判斷。"
 
     if decision == "No Bet":
         final_call = "Final Call: No Bet。今場沒有足夠優勢。"
@@ -383,6 +506,7 @@ def make_final_decision(league_result, home_result, away_result, line, over_odds
         "under_fair": under_fair,
         "data_source": data_source,
         "team_sample": team_sample,
+        "recent_sample": recent_sample,
         "final_call": final_call
     }
 
@@ -608,7 +732,7 @@ try:
 except Exception:
     bet_log_df = pd.DataFrame()
 
-df, league_col, home_col, away_col, goals_col, date_col = prepare_main_data(raw_df)
+df, league_col, home_col, away_col, goals_col, home_goals_col, away_goals_col, date_col = prepare_main_data(raw_df)
 
 league_list = make_league_list(df, league_col)
 team_list = make_team_list(df, home_col, away_col)
@@ -627,6 +751,8 @@ with tab_model:
 
         selected_league = st.selectbox("Select League", filtered_leagues)
         line = st.selectbox("Goal Line", [1.5, 2.5, 3.5, 4.5], index=2)
+
+        recent_n = st.selectbox("Recent Form Matches", [5, 8, 10, 15], index=2)
 
         home_input = st.text_input("Home Team", value="坎培拉祖雲達斯")
         away_input = st.text_input("Away Team", value="昆比恩城")
@@ -657,6 +783,32 @@ with tab_model:
             home_result = analyse_team(df, home_col, away_col, goals_col, home_team, line)
             away_result = analyse_team(df, home_col, away_col, goals_col, away_team, line)
 
+            home_recent = analyse_recent_team_form(
+                df,
+                home_col,
+                away_col,
+                goals_col,
+                home_goals_col,
+                away_goals_col,
+                date_col,
+                home_team,
+                line,
+                recent_n
+            )
+
+            away_recent = analyse_recent_team_form(
+                df,
+                home_col,
+                away_col,
+                goals_col,
+                home_goals_col,
+                away_goals_col,
+                date_col,
+                away_team,
+                line,
+                recent_n
+            )
+
             trend_rows, signal = analyse_recent_trend(
                 df,
                 league_col,
@@ -670,6 +822,8 @@ with tab_model:
                 league_result,
                 home_result,
                 away_result,
+                home_recent,
+                away_recent,
                 line,
                 over_odds,
                 under_odds,
@@ -712,15 +866,22 @@ with tab_model:
                 "home": display_home,
                 "away": display_away,
                 "league_result": league_result,
+                "home_result": home_result,
+                "away_result": away_result,
+                "home_recent": home_recent,
+                "away_recent": away_recent,
                 "trend_rows": trend_rows,
                 "signal": signal,
-                "final": final
+                "final": final,
+                "recent_n": recent_n
             }
 
     if st.session_state.get("last_analysis") is not None:
         saved = st.session_state["last_analysis"]
         final = saved["final"]
         league_result = saved["league_result"]
+        home_recent = saved["home_recent"]
+        away_recent = saved["away_recent"]
         trend_rows = saved["trend_rows"]
         signal = saved["signal"]
 
@@ -771,6 +932,39 @@ with tab_model:
         with m8:
             st.metric("Fair Under Odds", f"{final['under_fair']:.2f}")
 
+        st.subheader("Recent Form Reference")
+
+        recent_rows = []
+
+        if home_recent:
+            recent_rows.append({
+                "Side": "Home",
+                "Team": home_recent["team"],
+                "Recent Matches": home_recent["recent_matches"],
+                "Recent Avg Total Goals": round(home_recent["recent_avg_total_goals"], 2),
+                "Recent Median Total Goals": round(home_recent["recent_median_total_goals"], 2),
+                f"Recent Over {saved['line']}": f"{home_recent['recent_over_rate'] * 100:.1f}%",
+                "Recent Goals For": "" if home_recent["recent_goals_for"] is None else round(home_recent["recent_goals_for"], 2),
+                "Recent Goals Against": "" if home_recent["recent_goals_against"] is None else round(home_recent["recent_goals_against"], 2)
+            })
+
+        if away_recent:
+            recent_rows.append({
+                "Side": "Away",
+                "Team": away_recent["team"],
+                "Recent Matches": away_recent["recent_matches"],
+                "Recent Avg Total Goals": round(away_recent["recent_avg_total_goals"], 2),
+                "Recent Median Total Goals": round(away_recent["recent_median_total_goals"], 2),
+                f"Recent Over {saved['line']}": f"{away_recent['recent_over_rate'] * 100:.1f}%",
+                "Recent Goals For": "" if away_recent["recent_goals_for"] is None else round(away_recent["recent_goals_for"], 2),
+                "Recent Goals Against": "" if away_recent["recent_goals_against"] is None else round(away_recent["recent_goals_against"], 2)
+            })
+
+        if recent_rows:
+            st.dataframe(pd.DataFrame(recent_rows), use_container_width=True)
+        else:
+            st.warning("沒有足夠近期球隊資料。")
+
         st.subheader("Save Bet Preview")
 
         if st.session_state.get("last_bet_preview") is not None:
@@ -803,13 +997,13 @@ with tab_model:
 
         st.dataframe(league_table, use_container_width=True)
 
-        st.subheader("Recent Trend")
+        st.subheader("Recent League Trend")
 
         if trend_rows:
             st.dataframe(pd.DataFrame(trend_rows), use_container_width=True)
             st.info(signal)
         else:
-            st.info("沒有近期走勢資料。")
+            st.info("沒有近期聯賽走勢資料。")
 
         st.subheader("Reading")
         st.write(final["note"])
