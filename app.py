@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 11: Model + Save Bet + Result Update")
+st.write("Version 11 Fixed: Stable Save Bet + Result Update")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
@@ -20,15 +20,16 @@ BET_LOG_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRsx-N19kLkdt
 APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOpCg7z7Mm6PJ1G1fTduYlNFRUase3ZZsqR4lHXQtqwykklDfrDdtO0Ia9oGYnpc4F/exec"
 
 API_TOKEN = "hkjc_private_2026"
-
 NO_TEAM_OPTION = "不用球隊資料，只用聯賽數據"
-
 
 if "last_bet_payload" not in st.session_state:
     st.session_state["last_bet_payload"] = None
 
 if "last_bet_preview" not in st.session_state:
     st.session_state["last_bet_preview"] = None
+
+if "last_analysis" not in st.session_state:
+    st.session_state["last_analysis"] = None
 
 
 @st.cache_data(ttl=60)
@@ -595,24 +596,6 @@ def show_bet_log(df):
     st.subheader("Full Bet Log")
     st.dataframe(df, use_container_width=True)
 
-    if "line" in df.columns and "stake" in df.columns and "profit_loss" in df.columns:
-        st.subheader("Performance by Goal Line")
-
-        line_summary = df.groupby("line").agg(
-            bets=("line", "count"),
-            total_stake=("stake", "sum"),
-            profit_loss=("profit_loss", "sum")
-        ).reset_index()
-
-        line_summary["ROI"] = line_summary.apply(
-            lambda row: row["profit_loss"] / row["total_stake"] if row["total_stake"] > 0 else 0,
-            axis=1
-        )
-
-        line_summary["ROI"] = line_summary["ROI"].map(lambda x: f"{x * 100:.1f}%")
-
-        st.dataframe(line_summary, use_container_width=True)
-
 
 try:
     raw_df = load_csv(SHEET_CSV_URL)
@@ -662,83 +645,100 @@ with tab_model:
 
         analyse_button = st.form_submit_button("Analyse")
 
-    display_home = home_input if home_team == NO_TEAM_OPTION else home_team
-    display_away = away_input if away_team == NO_TEAM_OPTION else away_team
-
-    st.subheader("Selected Match")
-
-    a, b, c, d = st.columns(4)
-
-    with a:
-        st.info(selected_league)
-
-    with b:
-        st.info(str(line))
-
-    with c:
-        st.info(display_home)
-
-    with d:
-        st.info(display_away)
-
     if analyse_button:
+        display_home = home_input if home_team == NO_TEAM_OPTION else home_team
+        display_away = away_input if away_team == NO_TEAM_OPTION else away_team
+
         league_result = analyse_league(df, league_col, goals_col, selected_league, line)
 
         if league_result is None:
             st.error("找不到此聯賽資料。")
-            st.stop()
+        else:
+            home_result = analyse_team(df, home_col, away_col, goals_col, home_team, line)
+            away_result = analyse_team(df, home_col, away_col, goals_col, away_team, line)
 
-        home_result = analyse_team(df, home_col, away_col, goals_col, home_team, line)
-        away_result = analyse_team(df, home_col, away_col, goals_col, away_team, line)
+            trend_rows, signal = analyse_recent_trend(
+                df,
+                league_col,
+                goals_col,
+                date_col,
+                selected_league,
+                line
+            )
 
-        trend_rows, signal = analyse_recent_trend(
-            df,
-            league_col,
-            goals_col,
-            date_col,
-            selected_league,
-            line
-        )
+            final = make_final_decision(
+                league_result,
+                home_result,
+                away_result,
+                line,
+                over_odds,
+                under_odds,
+                signal
+            )
 
-        final = make_final_decision(
-            league_result,
-            home_result,
-            away_result,
-            line,
-            over_odds,
-            under_odds,
-            signal
-        )
+            payload = make_bet_payload(
+                bet_date,
+                selected_league,
+                display_home,
+                display_away,
+                line,
+                final["decision"],
+                final["side"],
+                over_odds,
+                under_odds,
+                stake
+            )
 
-        payload = make_bet_payload(
-            bet_date,
-            selected_league,
-            display_home,
-            display_away,
-            line,
-            final["decision"],
-            final["side"],
-            over_odds,
-            under_odds,
-            stake
-        )
+            preview = pd.DataFrame([{
+                "bet_date": payload["bet_date"],
+                "league_ch": payload["league_ch"],
+                "home_team_ch": payload["home_team_ch"],
+                "away_team_ch": payload["away_team_ch"],
+                "line": payload["line"],
+                "model_decision": payload["model_decision"],
+                "bet_side": payload["bet_side"],
+                "odds": payload["odds"],
+                "stake": payload["stake"],
+                "result": payload["result"],
+                "profit_loss": payload["profit_loss"]
+            }])
 
-        preview = pd.DataFrame([{
-            "bet_date": payload["bet_date"],
-            "league_ch": payload["league_ch"],
-            "home_team_ch": payload["home_team_ch"],
-            "away_team_ch": payload["away_team_ch"],
-            "line": payload["line"],
-            "model_decision": payload["model_decision"],
-            "bet_side": payload["bet_side"],
-            "odds": payload["odds"],
-            "stake": payload["stake"],
-            "result": payload["result"],
-            "profit_loss": payload["profit_loss"]
-        }])
+            st.session_state["last_bet_payload"] = payload
+            st.session_state["last_bet_preview"] = preview
 
-        st.session_state["last_bet_payload"] = payload
-        st.session_state["last_bet_preview"] = preview
+            st.session_state["last_analysis"] = {
+                "league": selected_league,
+                "line": line,
+                "home": display_home,
+                "away": display_away,
+                "league_result": league_result,
+                "trend_rows": trend_rows,
+                "signal": signal,
+                "final": final
+            }
+
+    if st.session_state.get("last_analysis") is not None:
+        saved = st.session_state["last_analysis"]
+        final = saved["final"]
+        league_result = saved["league_result"]
+        trend_rows = saved["trend_rows"]
+        signal = saved["signal"]
+
+        st.subheader("Selected Match")
+
+        x1, x2, x3, x4 = st.columns(4)
+
+        with x1:
+            st.info(saved["league"])
+
+        with x2:
+            st.info(str(saved["line"]))
+
+        with x3:
+            st.info(saved["home"])
+
+        with x4:
+            st.info(saved["away"])
 
         st.subheader("Final Call")
         st.success(final["final_call"])
@@ -749,10 +749,10 @@ with tab_model:
             st.metric("Decision", final["decision"])
 
         with m2:
-            st.metric(f"Over {line}", f"{final['final_over'] * 100:.1f}%")
+            st.metric(f"Over {saved['line']}", f"{final['final_over'] * 100:.1f}%")
 
         with m3:
-            st.metric(f"Under {line}", f"{final['final_under'] * 100:.1f}%")
+            st.metric(f"Under {saved['line']}", f"{final['final_under'] * 100:.1f}%")
 
         with m4:
             st.metric("Avg Goals", f"{final['final_avg']:.2f}")
@@ -772,21 +772,26 @@ with tab_model:
             st.metric("Fair Under Odds", f"{final['under_fair']:.2f}")
 
         st.subheader("Save Bet Preview")
-        st.dataframe(preview, use_container_width=True)
+
+        if st.session_state.get("last_bet_preview") is not None:
+            st.dataframe(st.session_state["last_bet_preview"], use_container_width=True)
 
         if st.button("Save Bet to Google Sheet"):
-            ok, message = post_to_apps_script(st.session_state["last_bet_payload"])
-
-            if ok:
-                st.success("Bet saved successfully. Google Sheet 已寫入。")
-                st.cache_data.clear()
+            if st.session_state.get("last_bet_payload") is None:
+                st.error("未有可儲存投注，請先 Analyse。")
             else:
-                st.error(f"Save failed: {message}")
+                ok, message = post_to_apps_script(st.session_state["last_bet_payload"])
+
+                if ok:
+                    st.success("Bet saved successfully. Google Sheet 已寫入。")
+                    st.cache_data.clear()
+                else:
+                    st.error(f"Save failed: {message}")
 
         st.subheader("League Reference")
 
         league_table = pd.DataFrame([{
-            "League": selected_league,
+            "League": saved["league"],
             "Matches": league_result["matches"],
             "Average Goals": round(league_result["avg_goals"], 2),
             "Median Goals": round(league_result["median_goals"], 2),
@@ -811,6 +816,8 @@ with tab_model:
         st.write(final["confidence_note"])
         st.write(final["value_note"])
         st.write(signal)
+    else:
+        st.info("先輸入資料，然後按 Analyse。")
 
 
 with tab_betlog:
@@ -828,19 +835,15 @@ with tab_result:
         if result_df.empty:
             st.info("Bet Log 暫時未有有效資料。")
         else:
-            if "result" in result_df.columns:
-                pending_df = result_df[
-                    result_df["result"].astype(str).str.lower().isin(["pending", "", "nan"])
-                ].copy()
-            else:
-                pending_df = result_df.copy()
+            pending_df = result_df[
+                result_df["result"].astype(str).str.lower().isin(["pending", "", "nan"])
+            ].copy()
 
             if pending_df.empty:
                 st.success("暫時沒有 Pending bet 要更新。")
                 st.dataframe(result_df.tail(20).iloc[::-1], use_container_width=True)
             else:
-                pending_df = pending_df.tail(50).copy()
-                pending_df = pending_df.reset_index(drop=True)
+                pending_df = pending_df.tail(50).copy().reset_index(drop=True)
 
                 labels = []
 
