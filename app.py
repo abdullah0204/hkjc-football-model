@@ -746,4 +746,4 @@ with tab_bet_log:
 
 
 with tab_bet_log:
-    show_bet_log_dashboard(bet_log_df)
+    show_bet_log(bet_log_df)
