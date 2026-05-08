@@ -9,11 +9,11 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 9: Goal model + Google Sheet database + Bet Log dashboard")
+st.write("Version 9 Fixed: Goal model + Google Sheet database + Bet Log dashboard")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
-BET_LOG_CSV_URL = ""
+BET_LOG_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQMMbUrTIsjnOdZZrxUf7t8rhMeXeCYCrPu9-lTmHTHnB34sqq7kAlUHpTKcP7VuQ/pub?gid=1909142678&single=true&output=csv"
 
 NO_TEAM_OPTION = "不用球隊資料，只用聯賽數據"
 
@@ -469,7 +469,7 @@ def show_bet_log_dashboard(bet_df):
     st.subheader("Bet Log Dashboard")
 
     if bet_df.empty:
-        st.info("未有 Bet Log。你可以建立 bet_log Google Sheet，再將 CSV link 放入左邊 Bet Log CSV URL。")
+        st.info("未有 Bet Log。你可以在 bet_log Google Sheet 新增下注紀錄。")
         st.write("建議欄位：bet_date, league_ch, home_team_ch, away_team_ch, line, model_decision, bet_side, odds, stake, result, profit_loss")
         return
 
@@ -521,7 +521,7 @@ def show_bet_log_dashboard(bet_df):
     st.subheader("Bet Log Table")
     st.dataframe(bet_df, use_container_width=True)
 
-    if "line" in bet_df.columns and "profit_loss" in bet_df.columns:
+    if "line" in bet_df.columns and "profit_loss" in bet_df.columns and "stake" in bet_df.columns:
         st.subheader("Performance by Goal Line")
 
         line_summary = bet_df.groupby("line").agg(
@@ -538,7 +538,7 @@ def show_bet_log_dashboard(bet_df):
         line_summary["ROI"] = line_summary["ROI"].map(lambda x: f"{x * 100:.1f}%")
         st.dataframe(line_summary, use_container_width=True)
 
-    if "league_ch" in bet_df.columns and "profit_loss" in bet_df.columns:
+    if "league_ch" in bet_df.columns and "profit_loss" in bet_df.columns and "stake" in bet_df.columns:
         st.subheader("Performance by League")
 
         league_summary = bet_df.groupby("league_ch").agg(
