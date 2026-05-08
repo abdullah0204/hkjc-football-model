@@ -47,68 +47,159 @@ if "analysis_result" not in st.session_state:
 st.markdown("""
 <style>
     .stApp {
-         input {
-        color: #f8fafc !important;
-        background-color: #1e293b !important;
+        background: #0f172a;
+        color: #e2e8f0;
     }
 
-    textarea {
-        color: #f8fafc !important;
-        background-color: #1e293b !important;
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 2rem;
+        max-width: 1200px;
     }
 
-    div[data-baseweb="input"] {
-        background-color: #1e293b !important;
+    h1, h2, h3, h4 {
         color: #f8fafc !important;
+    }
+
+    .main-title {
+        font-size: 2.2rem;
+        font-weight: 800;
+        margin-bottom: 0.25rem;
+        color: #ffffff;
+    }
+
+    .sub-title {
+        color: #94a3b8;
+        margin-bottom: 1rem;
+        font-size: 1rem;
+    }
+
+    .section-box {
+        background: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 18px;
+        padding: 18px;
+        margin-bottom: 16px;
+    }
+
+    .card {
+        background: linear-gradient(145deg, #111827, #0b1220);
+        border: 1px solid #233047;
+        border-radius: 18px;
+        padding: 16px;
+        margin-bottom: 14px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    }
+
+    .metric-card {
+        background: #111827;
+        border: 1px solid #253247;
+        border-radius: 16px;
+        padding: 14px 16px;
+        text-align: center;
+        min-height: 108px;
+    }
+
+    .metric-label {
+        color: #94a3b8;
+        font-size: 0.9rem;
+        margin-bottom: 4px;
+    }
+
+    .metric-value {
+        color: #ffffff;
+        font-size: 1.55rem;
+        font-weight: 800;
+    }
+
+    .metric-sub {
+        color: #cbd5e1;
+        font-size: 0.85rem;
+        margin-top: 4px;
+    }
+
+    .call-card {
+        border-radius: 20px;
+        padding: 22px;
+        margin-bottom: 18px;
+        border: 1px solid #334155;
+        background: linear-gradient(145deg, #111827, #172033);
+    }
+
+    .call-title {
+        font-size: 0.95rem;
+        color: #94a3b8;
+        margin-bottom: 8px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        font-weight: 700;
+    }
+
+    .call-value {
+        font-size: 2rem;
+        font-weight: 900;
+        margin-bottom: 6px;
+        line-height: 1.2;
+        color: #ffffff;
+    }
+
+    .call-note {
+        color: #cbd5e1;
+        font-size: 0.95rem;
+    }
+
+    .green-glow {
+        background: linear-gradient(145deg, rgba(5,150,105,0.18), rgba(16,185,129,0.10));
+        border: 1px solid rgba(16,185,129,0.5);
+    }
+
+    .red-glow {
+        background: linear-gradient(145deg, rgba(153,27,27,0.18), rgba(239,68,68,0.10));
+        border: 1px solid rgba(239,68,68,0.5);
+    }
+
+    .yellow-glow {
+        background: linear-gradient(145deg, rgba(146,64,14,0.18), rgba(245,158,11,0.10));
+        border: 1px solid rgba(245,158,11,0.5);
+    }
+
+    .blue-glow {
+        background: linear-gradient(145deg, rgba(30,64,175,0.18), rgba(59,130,246,0.10));
+        border: 1px solid rgba(59,130,246,0.5);
+    }
+
+    .tiny-note {
+        color: #94a3b8;
+        font-size: 0.82rem;
+    }
+
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        background: #111827;
+        border-radius: 12px;
+        padding: 10px 16px;
+        color: #e2e8f0;
+    }
+
+    .stButton > button {
         border-radius: 12px !important;
+        border: 1px solid #334155 !important;
+        font-weight: 700 !important;
     }
 
-    div[data-baseweb="input"] input {
-        color: #f8fafc !important;
-        background-color: #1e293b !important;
-    }
-
-    div[data-baseweb="select"] {
-        background-color: #1e293b !important;
-        color: #f8fafc !important;
-        border-radius: 12px !important;
-    }
-
-    div[data-baseweb="select"] div {
-        color: #f8fafc !important;
-    }
-
-    div[data-baseweb="popover"] {
-        background-color: #1e293b !important;
-        color: #f8fafc !important;
-    }
-
-    ul[role="listbox"] {
-        background-color: #1e293b !important;
-        color: #f8fafc !important;
-    }
-
-    li[role="option"] {
-        color: #f8fafc !important;
-        background-color: #1e293b !important;
-    }
-
-    li[role="option"]:hover {
-        background-color: #334155 !important;
-        color: #ffffff !important;
-    }
-
-    label {
-        color: #e2e8f0 !important;
-    }
-
-    .stTextInput label,
-    .stSelectbox label,
-    .stNumberInput label,
-    .stDateInput label {
-        color: #e2e8f0 !important;
-        font-weight: 600 !important;
-    }
+    .small-badge {
+        display: inline-block;
+        background: #1e293b;
+        color: #cbd5e1;
+        border: 1px solid #334155;
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 0.8rem;
+        margin-right: 6px;
+        margin-bottom: 6px;
     }
 </style>
 """, unsafe_allow_html=True)
