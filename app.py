@@ -1383,10 +1383,10 @@ with tab_strong:
                 with tab_team:
     show_team_backtest_dashboard(
     df,
-    league_col,
-    home_col,
-    away_col,
-    goals_col,
-    date_col,
-    team_list
+        league_col,
+        home_col,
+        away_col,
+        goals_col,
+        date_col,
+        team_list
     )
