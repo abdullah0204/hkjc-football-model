@@ -50,11 +50,49 @@ def find_column(df, possible_names):
     return None
 
 
+def clean_date_for_model(value):
+    if pd.isna(value):
+        return pd.NaT
+
+    text = str(value).strip()
+
+    # Extract normal date from messy strings, such as 2026-05-08+08:00
+    match = pd.Series([text]).str.extract(r"(\d{4}-\d{2}-\d{2})").iloc[0, 0]
+
+    if pd.notna(match):
+        return pd.to_datetime(match, errors="coerce")
+
+    return pd.to_datetime(text, errors="coerce")
+
+
 def prepare_main_data(df):
-    league_col = find_column(df, ["league_ch", "league_en", "league_code"])
-    home_col = find_column(df, ["home_team_ch", "home_team_en"])
-    away_col = find_column(df, ["away_team_ch", "away_team_en"])
-    goals_col = find_column(df, ["ft_total_goals", "total_goals"])
+    league_col = find_column(df, [
+        "league_ch",
+        "league",
+        "league_name_ch",
+        "league_code"
+    ])
+
+    home_col = find_column(df, [
+        "home_team_ch",
+        "home_team",
+        "home",
+        "home_name_ch"
+    ])
+
+    away_col = find_column(df, [
+        "away_team_ch",
+        "away_team",
+        "away",
+        "away_name_ch"
+    ])
+
+    goals_col = find_column(df, [
+        "ft_total_goals",
+        "total_goals",
+        "ft_total",
+        "goals_total"
+    ])
 
     home_goals_col = find_column(df, [
         "ft_home_goals",
@@ -72,13 +110,46 @@ def prepare_main_data(df):
         "away_ft_goals"
     ])
 
-    date_col = find_column(df, ["match_date", "kick_off_time", "date"])
+    date_col = find_column(df, [
+        "match_date",
+        "match_datetime",
+        "match_time",
+        "kick_off_time",
+        "kickoff_time",
+        "kick_off",
+        "date",
+        "start_time"
+    ])
 
-    if league_col is None or home_col is None or away_col is None or goals_col is None:
-        st.error("資料欄位不完整。需要 league, home team, away team, ft_total_goals。")
+    if league_col is None:
+        st.error("找不到 league_ch 欄位。請檢查 matches 第一行欄名。")
+        st.stop()
+
+    if home_col is None:
+        st.error("找不到 home_team_ch 欄位。請檢查 matches 第一行欄名。")
+        st.stop()
+
+    if away_col is None:
+        st.error("找不到 away_team_ch 欄位。請檢查 matches 第一行欄名。")
+        st.stop()
+
+    if goals_col is None:
+        if home_goals_col is not None and away_goals_col is not None:
+            df = df.copy()
+            df[home_goals_col] = pd.to_numeric(df[home_goals_col], errors="coerce")
+            df[away_goals_col] = pd.to_numeric(df[away_goals_col], errors="coerce")
+            df["ft_total_goals_auto"] = df[home_goals_col] + df[away_goals_col]
+            goals_col = "ft_total_goals_auto"
+        else:
+            st.error("找不到 ft_total_goals / total_goals，也找不到 ft_home_goals + ft_away_goals。")
+            st.stop()
+
+    if date_col is None:
+        st.error("找不到日期欄位。需要 match_date / date / kick_off_time 其中一個。")
         st.stop()
 
     df = df.copy()
+
     df[goals_col] = pd.to_numeric(df[goals_col], errors="coerce")
     df = df.dropna(subset=[goals_col])
 
@@ -88,8 +159,20 @@ def prepare_main_data(df):
     if away_goals_col:
         df[away_goals_col] = pd.to_numeric(df[away_goals_col], errors="coerce")
 
-    if date_col:
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df[date_col] = df[date_col].apply(clean_date_for_model)
+    df = df.dropna(subset=[date_col])
+
+    st.write("Detected columns:")
+    st.write({
+        "league_col": league_col,
+        "home_col": home_col,
+        "away_col": away_col,
+        "goals_col": goals_col,
+        "home_goals_col": home_goals_col,
+        "away_goals_col": away_goals_col,
+        "date_col": date_col,
+        "valid_rows_after_cleaning": len(df)
+    })
 
     return df, league_col, home_col, away_col, goals_col, home_goals_col, away_goals_col, date_col
 
@@ -922,7 +1005,7 @@ def calculate_backtest_signal(league_history, home_history, away_history, goals_
     home_sample = len(home_history)
     away_sample = len(away_history)
 
-    if league_sample < 30:
+    if league_sample < 10:
         return None
 
     league_over = (league_history[goals_col] > line).mean()
@@ -930,10 +1013,10 @@ def calculate_backtest_signal(league_history, home_history, away_history, goals_
 
     team_histories = []
 
-    if home_sample >= 5:
+    if home_sample >= 3:
         team_histories.append(home_history)
 
-    if away_sample >= 5:
+    if away_sample >= 3:
         team_histories.append(away_history)
 
     if team_histories:
@@ -958,10 +1041,10 @@ def calculate_backtest_signal(league_history, home_history, away_history, goals_
     final_under = 1 - final_over
 
     if line == 2.5:
-        if final_over >= 0.60 and final_avg >= 2.70:
+        if final_over >= 0.58 and final_avg >= 2.65:
             decision = "Over"
             confidence = "Strong"
-        elif final_under >= 0.60 and final_avg <= 2.60:
+        elif final_under >= 0.58 and final_avg <= 2.60:
             decision = "Under"
             confidence = "Strong"
         else:
@@ -972,7 +1055,7 @@ def calculate_backtest_signal(league_history, home_history, away_history, goals_
         if final_over >= 0.48 and final_avg >= 3.30:
             decision = "Over"
             confidence = "Strong"
-        elif final_under >= 0.60:
+        elif final_under >= 0.58:
             decision = "Under"
             confidence = "Strong"
         else:
@@ -1002,6 +1085,8 @@ def run_backtest(df, league_col, home_col, away_col, goals_col, date_col, line, 
 
     bt_df = df.copy()
     bt_df = bt_df.dropna(subset=[date_col, goals_col])
+    bt_df[goals_col] = pd.to_numeric(bt_df[goals_col], errors="coerce")
+    bt_df = bt_df.dropna(subset=[goals_col])
     bt_df = bt_df.sort_values(date_col).reset_index(drop=True)
 
     if len(bt_df) > max_rows:
@@ -1018,7 +1103,7 @@ def run_backtest(df, league_col, home_col, away_col, goals_col, date_col, line, 
 
         history_df = bt_df[bt_df[date_col] < match_date].copy()
 
-        if history_df.empty:
+        if len(history_df) < 50:
             continue
 
         league_history = history_df[history_df[league_col].astype(str) == league].copy()
@@ -1075,11 +1160,29 @@ def run_backtest(df, league_col, home_col, away_col, goals_col, date_col, line, 
 
 
 def show_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_col):
-    st.subheader("Backtest Dashboard 17A")
+    st.subheader("Backtest Dashboard 17A Fixed")
     st.write("方向命中率回溯，不計賠率，不計 ROI。每場只用該場之前嘅歷史資料。")
+
+    st.write("Backtest column check:")
+    st.write({
+        "total_rows_available": len(df),
+        "league_col": league_col,
+        "home_col": home_col,
+        "away_col": away_col,
+        "goals_col": goals_col,
+        "date_col": date_col
+    })
 
     if date_col is None:
         st.error("主 database 沒有日期欄，暫時不能做 backtest。")
+        return
+
+    valid_rows = df.dropna(subset=[date_col, goals_col])
+
+    st.write("Valid rows for backtest:", len(valid_rows))
+
+    if len(valid_rows) < 100:
+        st.error("有效資料少過 100 行。請檢查日期欄或入球欄是否正確。")
         return
 
     col_a, col_b, col_c = st.columns(3)
@@ -1088,7 +1191,7 @@ def show_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_
         selected_line = st.selectbox("Backtest Line", [2.5, 3.5], index=0)
 
     with col_b:
-        max_rows = st.selectbox("Rows to Test", [1000, 2000, 3000, 5000, 10000], index=2)
+        max_rows = st.selectbox("Rows to Test", [1000, 2000, 3000, 5000, 10000, 30000], index=4)
 
     with col_c:
         only_strong = st.checkbox("Only Conservative Strong Signals", value=True)
@@ -1107,14 +1210,16 @@ def show_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_
             )
 
         if result_df.empty:
-            st.warning("未有足夠資料完成 backtest。")
+            st.warning("未有足夠資料完成 backtest。請先取消 Conservative Strong Signals 再試，或檢查 date_col / goals_col。")
             return
+
+        st.write("Raw backtest rows:", len(result_df))
 
         if only_strong:
             result_df = result_df[result_df["model_decision"].isin(["Over", "Under"])].copy()
 
         if result_df.empty:
-            st.warning("Conservative Mode 下沒有 strong signal。")
+            st.warning("Conservative Mode 下沒有 strong signal。請取消勾選 Only Conservative Strong Signals 再試。")
             return
 
         settled_df = result_df[result_df["win"].notna()].copy()
@@ -1199,7 +1304,6 @@ def show_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_
         st.subheader("Recent Performance")
 
         recent_rows = []
-
         latest_date = settled_df["match_date"].max()
 
         for days in [30, 90, 180]:
@@ -1222,6 +1326,7 @@ def show_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_
             st.info("未有近期回溯資料。")
 
         st.subheader("Backtest Detail")
+
         display_df = settled_df.copy()
         display_df["final_over_probability"] = display_df["final_over_probability"].map(lambda x: f"{x * 100:.1f}%")
         display_df["final_under_probability"] = display_df["final_under_probability"].map(lambda x: f"{x * 100:.1f}%")
