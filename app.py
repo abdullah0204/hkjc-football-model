@@ -1264,18 +1264,8 @@ def run_backtest(df, league_col, home_col, away_col, goals_col, date_col, line, 
 
 
 def show_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_col):
-    st.subheader("Backtest Dashboard 17A Fixed")
+    st.subheader("Backtest Dashboard 17A Strict Fast")
     st.write("方向命中率回溯，不計賠率，不計 ROI。每場只用該場之前嘅歷史資料。")
-
-    st.write("Backtest column check:")
-    st.write({
-        "total_rows_available": len(df),
-        "league_col": league_col,
-        "home_col": home_col,
-        "away_col": away_col,
-        "goals_col": goals_col,
-        "date_col": date_col
-    })
 
     if date_col is None:
         st.error("主 database 沒有日期欄，暫時不能做 backtest。")
@@ -1283,161 +1273,172 @@ def show_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_
 
     valid_rows = df.dropna(subset=[date_col, goals_col])
 
-    st.write("Valid rows for backtest:", len(valid_rows))
+    st.info(
+        f"Valid rows: {len(valid_rows)} | "
+        f"Date column: {date_col} | "
+        f"Goals column: {goals_col}"
+    )
 
     if len(valid_rows) < 100:
         st.error("有效資料少過 100 行。請檢查日期欄或入球欄是否正確。")
         return
 
-    col_a, col_b, col_c = st.columns(3)
+    with st.form("backtest_form"):
+        col_a, col_b, col_c = st.columns(3)
 
-    with col_a:
-        selected_line = st.selectbox("Backtest Line", [2.5, 3.5], index=0)
+        with col_a:
+            selected_line = st.selectbox("Backtest Line", [2.5, 3.5], index=0)
 
-    with col_b:
-        max_rows = st.selectbox("Rows to Test", [1000, 2000, 3000, 5000, 10000, 30000], index=4)
+        with col_b:
+            max_rows = st.selectbox("Rows to Test", [1000, 3000, 5000, 10000, 30000], index=3)
 
-    with col_c:
-        only_strong = st.checkbox("Only Conservative Strong Signals", value=True)
+        with col_c:
+            only_strong = st.checkbox("Only Conservative Strong Signals", value=True)
 
-    if st.button("Run Backtest", use_container_width=True):
-        with st.spinner("Running backtest..."):
-            result_df = run_backtest(
-                df,
-                league_col,
-                home_col,
-                away_col,
-                goals_col,
-                date_col,
-                selected_line,
-                max_rows=max_rows
-            )
+        run_button = st.form_submit_button("Run Backtest", use_container_width=True)
 
-        if result_df.empty:
-            st.warning("未有足夠資料完成 backtest。請先取消 Conservative Strong Signals 再試，或檢查 date_col / goals_col。")
-            return
+    if not run_button:
+        st.warning("改完設定後，按 Run Backtest 先會開始計。")
+        return
 
-        st.write("Raw backtest rows:", len(result_df))
-
-        if only_strong:
-            result_df = result_df[result_df["model_decision"].isin(["Over", "Under"])].copy()
-
-        if result_df.empty:
-            st.warning("Conservative Mode 下沒有 strong signal。請取消勾選 Only Conservative Strong Signals 再試。")
-            return
-
-        settled_df = result_df[result_df["win"].notna()].copy()
-
-        if settled_df.empty:
-            st.warning("沒有可計算命中率嘅場次。")
-            return
-
-        total_tested = len(result_df)
-        strong_bets = len(settled_df)
-        wins = settled_df["win"].sum()
-        win_rate = wins / strong_bets if strong_bets > 0 else 0
-
-        over_df = settled_df[settled_df["model_decision"] == "Over"].copy()
-        under_df = settled_df[settled_df["model_decision"] == "Under"].copy()
-
-        over_win_rate = over_df["win"].mean() if len(over_df) > 0 else 0
-        under_win_rate = under_df["win"].mean() if len(under_df) > 0 else 0
-
-        m1, m2, m3, m4 = st.columns(4)
-
-        with m1:
-            st.metric("Total Signals", total_tested)
-
-        with m2:
-            st.metric("Strong Bets", strong_bets)
-
-        with m3:
-            st.metric("Win Rate", f"{win_rate * 100:.1f}%")
-
-        with m4:
-            st.metric("Wins", int(wins))
-
-        m5, m6, m7, m8 = st.columns(4)
-
-        with m5:
-            st.metric("Over Bets", len(over_df))
-
-        with m6:
-            st.metric("Over Win Rate", f"{over_win_rate * 100:.1f}%")
-
-        with m7:
-            st.metric("Under Bets", len(under_df))
-
-        with m8:
-            st.metric("Under Win Rate", f"{under_win_rate * 100:.1f}%")
-
-        st.subheader("Performance by League")
-
-        league_summary = settled_df.groupby("league_ch").agg(
-            bets=("win", "count"),
-            wins=("win", "sum"),
-            avg_goals=("actual_goals", "mean")
-        ).reset_index()
-
-        league_summary["win_rate"] = league_summary["wins"] / league_summary["bets"]
-        league_summary = league_summary.sort_values(["win_rate", "bets"], ascending=[False, False])
-
-        st.write("Best Leagues")
-        st.dataframe(
-            league_summary[league_summary["bets"] >= 5].head(15),
-            use_container_width=True
+    with st.spinner("Running strict backtest..."):
+        result_df = run_backtest(
+            df,
+            league_col,
+            home_col,
+            away_col,
+            goals_col,
+            date_col,
+            selected_line,
+            max_rows=max_rows
         )
 
-        st.write("Worst Leagues")
-        st.dataframe(
-            league_summary[league_summary["bets"] >= 5].sort_values(["win_rate", "bets"], ascending=[True, False]).head(15),
-            use_container_width=True
-        )
+    if result_df.empty:
+        st.warning("未有足夠資料完成 backtest。可以試下取消 Conservative Strong Signals，或者降低 Rows to Test。")
+        return
 
-        st.subheader("Performance by Decision")
+    st.write("Raw backtest rows:", len(result_df))
 
-        decision_summary = settled_df.groupby("model_decision").agg(
-            bets=("win", "count"),
-            wins=("win", "sum"),
-            avg_goals=("actual_goals", "mean")
-        ).reset_index()
+    if only_strong:
+        result_df = result_df[result_df["model_decision"].isin(["Over", "Under"])].copy()
 
-        decision_summary["win_rate"] = decision_summary["wins"] / decision_summary["bets"]
-        st.dataframe(decision_summary, use_container_width=True)
+    if result_df.empty:
+        st.warning("Conservative Mode 下沒有 strong signal。請取消勾選 Only Conservative Strong Signals 再試。")
+        return
 
-        st.subheader("Recent Performance")
+    settled_df = result_df[result_df["win"].notna()].copy()
 
-        recent_rows = []
-        latest_date = settled_df["match_date"].max()
+    if settled_df.empty:
+        st.warning("沒有可計算命中率嘅場次。")
+        return
 
-        for days in [30, 90, 180]:
-            start_date = latest_date - pd.Timedelta(days=days)
-            recent_df = settled_df[settled_df["match_date"] >= start_date].copy()
+    total_tested = len(result_df)
+    strong_bets = len(settled_df)
+    wins = settled_df["win"].sum()
+    win_rate = wins / strong_bets if strong_bets > 0 else 0
 
-            if len(recent_df) == 0:
-                continue
+    over_df = settled_df[settled_df["model_decision"] == "Over"].copy()
+    under_df = settled_df[settled_df["model_decision"] == "Under"].copy()
 
-            recent_rows.append({
-                "period": f"Last {days} days",
-                "bets": len(recent_df),
-                "wins": int(recent_df["win"].sum()),
-                "win_rate": f"{recent_df['win'].mean() * 100:.1f}%"
-            })
+    over_win_rate = over_df["win"].mean() if len(over_df) > 0 else 0
+    under_win_rate = under_df["win"].mean() if len(under_df) > 0 else 0
 
-        if recent_rows:
-            st.dataframe(pd.DataFrame(recent_rows), use_container_width=True)
-        else:
-            st.info("未有近期回溯資料。")
+    m1, m2, m3, m4 = st.columns(4)
 
-        st.subheader("Backtest Detail")
+    with m1:
+        st.metric("Total Signals", total_tested)
 
-        display_df = settled_df.copy()
-        display_df["final_over_probability"] = display_df["final_over_probability"].map(lambda x: f"{x * 100:.1f}%")
-        display_df["final_under_probability"] = display_df["final_under_probability"].map(lambda x: f"{x * 100:.1f}%")
-        display_df["final_avg_goals"] = display_df["final_avg_goals"].map(lambda x: f"{x:.2f}")
+    with m2:
+        st.metric("Strong Bets", strong_bets)
 
-        st.dataframe(display_df.tail(300).iloc[::-1], use_container_width=True)
+    with m3:
+        st.metric("Win Rate", f"{win_rate * 100:.1f}%")
 
+    with m4:
+        st.metric("Wins", int(wins))
+
+    m5, m6, m7, m8 = st.columns(4)
+
+    with m5:
+        st.metric("Over Bets", len(over_df))
+
+    with m6:
+        st.metric("Over Win Rate", f"{over_win_rate * 100:.1f}%")
+
+    with m7:
+        st.metric("Under Bets", len(under_df))
+
+    with m8:
+        st.metric("Under Win Rate", f"{under_win_rate * 100:.1f}%")
+
+    st.subheader("Performance by League")
+
+    league_summary = settled_df.groupby("league_ch").agg(
+        bets=("win", "count"),
+        wins=("win", "sum"),
+        avg_goals=("actual_goals", "mean")
+    ).reset_index()
+
+    league_summary["win_rate"] = league_summary["wins"] / league_summary["bets"]
+    league_summary = league_summary.sort_values(["win_rate", "bets"], ascending=[False, False])
+
+    st.write("Best Leagues")
+    st.dataframe(
+        league_summary[league_summary["bets"] >= 5].head(15),
+        use_container_width=True
+    )
+
+    st.write("Worst Leagues")
+    st.dataframe(
+        league_summary[league_summary["bets"] >= 5]
+        .sort_values(["win_rate", "bets"], ascending=[True, False])
+        .head(15),
+        use_container_width=True
+    )
+
+    st.subheader("Performance by Decision")
+
+    decision_summary = settled_df.groupby("model_decision").agg(
+        bets=("win", "count"),
+        wins=("win", "sum"),
+        avg_goals=("actual_goals", "mean")
+    ).reset_index()
+
+    decision_summary["win_rate"] = decision_summary["wins"] / decision_summary["bets"]
+    st.dataframe(decision_summary, use_container_width=True)
+
+    st.subheader("Recent Performance")
+
+    recent_rows = []
+    latest_date = settled_df["match_date"].max()
+
+    for days in [30, 90, 180]:
+        start_date = latest_date - pd.Timedelta(days=days)
+        recent_df = settled_df[settled_df["match_date"] >= start_date].copy()
+
+        if len(recent_df) == 0:
+            continue
+
+        recent_rows.append({
+            "period": f"Last {days} days",
+            "bets": len(recent_df),
+            "wins": int(recent_df["win"].sum()),
+            "win_rate": f"{recent_df['win'].mean() * 100:.1f}%"
+        })
+
+    if recent_rows:
+        st.dataframe(pd.DataFrame(recent_rows), use_container_width=True)
+    else:
+        st.info("未有近期回溯資料。")
+
+    st.subheader("Backtest Detail")
+
+    display_df = settled_df.copy()
+    display_df["final_over_probability"] = display_df["final_over_probability"].map(lambda x: f"{x * 100:.1f}%")
+    display_df["final_under_probability"] = display_df["final_under_probability"].map(lambda x: f"{x * 100:.1f}%")
+    display_df["final_avg_goals"] = display_df["final_avg_goals"].map(lambda x: f"{x:.2f}")
+
+    st.dataframe(display_df.tail(300).iloc[::-1], use_container_width=True)
 def show_bet_log(df):
     st.subheader("Bet Log Dashboard")
 
