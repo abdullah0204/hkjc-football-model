@@ -1326,7 +1326,7 @@ if not upcoming_df.empty:
 else:
     st.warning("Upcoming matches not loaded or empty.")
 
-tab_model, tab_betlog, tab_result = st.tabs(["Model", "Bet Log", "Result Update"])
+tab_model, tab_betlog, tab_result = st.tabs(["Model", "Bet Log", "Result Update", "Backtest"])
 
 
 with tab_model:
@@ -1774,3 +1774,12 @@ with tab_result:
                         st.error(f"Update failed: {message}")
 
                 st.caption("更新後 Google CSV 可能有 1 至 5 分鐘延遲。之後去 Bet Log 按 Reload。")
+with tab_backtest:
+    show_backtest_dashboard(
+        df,
+        league_col,
+        home_col,
+        away_col,
+        goals_col,
+        date_col
+    )
