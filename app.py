@@ -907,6 +907,327 @@ def prepare_bet_log(df):
 
     return df
 
+def get_backtest_team_df(history_df, home_col, away_col, team_name):
+    if not team_name:
+        return pd.DataFrame()
+
+    return history_df[
+        (history_df[home_col].astype(str) == str(team_name)) |
+        (history_df[away_col].astype(str) == str(team_name))
+    ].copy()
+
+
+def calculate_backtest_signal(league_history, home_history, away_history, goals_col, line):
+    league_sample = len(league_history)
+    home_sample = len(home_history)
+    away_sample = len(away_history)
+
+    if league_sample < 30:
+        return None
+
+    league_over = (league_history[goals_col] > line).mean()
+    league_avg = league_history[goals_col].mean()
+
+    team_histories = []
+
+    if home_sample >= 5:
+        team_histories.append(home_history)
+
+    if away_sample >= 5:
+        team_histories.append(away_history)
+
+    if team_histories:
+        team_over_values = []
+        team_avg_values = []
+
+        for team_df in team_histories:
+            team_over_values.append((team_df[goals_col] > line).mean())
+            team_avg_values.append(team_df[goals_col].mean())
+
+        team_over = sum(team_over_values) / len(team_over_values)
+        team_avg = sum(team_avg_values) / len(team_avg_values)
+
+        final_over = league_over * 0.60 + team_over * 0.40
+        final_avg = league_avg * 0.60 + team_avg * 0.40
+        data_source = "League 60% + Team 40%"
+    else:
+        final_over = league_over
+        final_avg = league_avg
+        data_source = "League only"
+
+    final_under = 1 - final_over
+
+    if line == 2.5:
+        if final_over >= 0.60 and final_avg >= 2.70:
+            decision = "Over"
+            confidence = "Strong"
+        elif final_under >= 0.60 and final_avg <= 2.60:
+            decision = "Under"
+            confidence = "Strong"
+        else:
+            decision = "Watch Only"
+            confidence = "Weak"
+
+    elif line == 3.5:
+        if final_over >= 0.48 and final_avg >= 3.30:
+            decision = "Over"
+            confidence = "Strong"
+        elif final_under >= 0.60:
+            decision = "Under"
+            confidence = "Strong"
+        else:
+            decision = "Watch Only"
+            confidence = "Weak"
+
+    else:
+        decision = "Watch Only"
+        confidence = "Weak"
+
+    return {
+        "league_sample": league_sample,
+        "home_sample": home_sample,
+        "away_sample": away_sample,
+        "final_over": final_over,
+        "final_under": final_under,
+        "final_avg": final_avg,
+        "decision": decision,
+        "confidence": confidence,
+        "data_source": data_source
+    }
+
+
+def run_backtest(df, league_col, home_col, away_col, goals_col, date_col, line, max_rows=3000):
+    if date_col is None:
+        return pd.DataFrame()
+
+    bt_df = df.copy()
+    bt_df = bt_df.dropna(subset=[date_col, goals_col])
+    bt_df = bt_df.sort_values(date_col).reset_index(drop=True)
+
+    if len(bt_df) > max_rows:
+        bt_df = bt_df.tail(max_rows).reset_index(drop=True)
+
+    results = []
+
+    for idx, row in bt_df.iterrows():
+        match_date = row[date_col]
+        league = str(row[league_col])
+        home = str(row[home_col])
+        away = str(row[away_col])
+        actual_goals = row[goals_col]
+
+        history_df = bt_df[bt_df[date_col] < match_date].copy()
+
+        if history_df.empty:
+            continue
+
+        league_history = history_df[history_df[league_col].astype(str) == league].copy()
+
+        home_history = get_backtest_team_df(history_df, home_col, away_col, home)
+        away_history = get_backtest_team_df(history_df, home_col, away_col, away)
+
+        signal = calculate_backtest_signal(
+            league_history,
+            home_history,
+            away_history,
+            goals_col,
+            line
+        )
+
+        if signal is None:
+            continue
+
+        decision = signal["decision"]
+
+        if decision == "Watch Only":
+            actual_result = "Watch Only"
+            win = None
+        elif decision == "Over":
+            actual_result = "Over" if actual_goals > line else "Under"
+            win = actual_goals > line
+        elif decision == "Under":
+            actual_result = "Under" if actual_goals < line else "Over"
+            win = actual_goals < line
+        else:
+            actual_result = "Watch Only"
+            win = None
+
+        results.append({
+            "match_date": match_date,
+            "league_ch": league,
+            "home_team_ch": home,
+            "away_team_ch": away,
+            "line": line,
+            "actual_goals": actual_goals,
+            "model_decision": decision,
+            "actual_result": actual_result,
+            "win": win,
+            "final_over_probability": signal["final_over"],
+            "final_under_probability": signal["final_under"],
+            "final_avg_goals": signal["final_avg"],
+            "league_sample": signal["league_sample"],
+            "home_sample": signal["home_sample"],
+            "away_sample": signal["away_sample"],
+            "data_source": signal["data_source"]
+        })
+
+    return pd.DataFrame(results)
+
+
+def show_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_col):
+    st.subheader("Backtest Dashboard 17A")
+    st.write("方向命中率回溯，不計賠率，不計 ROI。每場只用該場之前嘅歷史資料。")
+
+    if date_col is None:
+        st.error("主 database 沒有日期欄，暫時不能做 backtest。")
+        return
+
+    col_a, col_b, col_c = st.columns(3)
+
+    with col_a:
+        selected_line = st.selectbox("Backtest Line", [2.5, 3.5], index=0)
+
+    with col_b:
+        max_rows = st.selectbox("Rows to Test", [1000, 2000, 3000, 5000, 10000], index=2)
+
+    with col_c:
+        only_strong = st.checkbox("Only Conservative Strong Signals", value=True)
+
+    if st.button("Run Backtest", use_container_width=True):
+        with st.spinner("Running backtest..."):
+            result_df = run_backtest(
+                df,
+                league_col,
+                home_col,
+                away_col,
+                goals_col,
+                date_col,
+                selected_line,
+                max_rows=max_rows
+            )
+
+        if result_df.empty:
+            st.warning("未有足夠資料完成 backtest。")
+            return
+
+        if only_strong:
+            result_df = result_df[result_df["model_decision"].isin(["Over", "Under"])].copy()
+
+        if result_df.empty:
+            st.warning("Conservative Mode 下沒有 strong signal。")
+            return
+
+        settled_df = result_df[result_df["win"].notna()].copy()
+
+        if settled_df.empty:
+            st.warning("沒有可計算命中率嘅場次。")
+            return
+
+        total_tested = len(result_df)
+        strong_bets = len(settled_df)
+        wins = settled_df["win"].sum()
+        win_rate = wins / strong_bets if strong_bets > 0 else 0
+
+        over_df = settled_df[settled_df["model_decision"] == "Over"].copy()
+        under_df = settled_df[settled_df["model_decision"] == "Under"].copy()
+
+        over_win_rate = over_df["win"].mean() if len(over_df) > 0 else 0
+        under_win_rate = under_df["win"].mean() if len(under_df) > 0 else 0
+
+        m1, m2, m3, m4 = st.columns(4)
+
+        with m1:
+            st.metric("Total Signals", total_tested)
+
+        with m2:
+            st.metric("Strong Bets", strong_bets)
+
+        with m3:
+            st.metric("Win Rate", f"{win_rate * 100:.1f}%")
+
+        with m4:
+            st.metric("Wins", int(wins))
+
+        m5, m6, m7, m8 = st.columns(4)
+
+        with m5:
+            st.metric("Over Bets", len(over_df))
+
+        with m6:
+            st.metric("Over Win Rate", f"{over_win_rate * 100:.1f}%")
+
+        with m7:
+            st.metric("Under Bets", len(under_df))
+
+        with m8:
+            st.metric("Under Win Rate", f"{under_win_rate * 100:.1f}%")
+
+        st.subheader("Performance by League")
+
+        league_summary = settled_df.groupby("league_ch").agg(
+            bets=("win", "count"),
+            wins=("win", "sum"),
+            avg_goals=("actual_goals", "mean")
+        ).reset_index()
+
+        league_summary["win_rate"] = league_summary["wins"] / league_summary["bets"]
+        league_summary = league_summary.sort_values(["win_rate", "bets"], ascending=[False, False])
+
+        st.write("Best Leagues")
+        st.dataframe(
+            league_summary[league_summary["bets"] >= 5].head(15),
+            use_container_width=True
+        )
+
+        st.write("Worst Leagues")
+        st.dataframe(
+            league_summary[league_summary["bets"] >= 5].sort_values(["win_rate", "bets"], ascending=[True, False]).head(15),
+            use_container_width=True
+        )
+
+        st.subheader("Performance by Decision")
+
+        decision_summary = settled_df.groupby("model_decision").agg(
+            bets=("win", "count"),
+            wins=("win", "sum"),
+            avg_goals=("actual_goals", "mean")
+        ).reset_index()
+
+        decision_summary["win_rate"] = decision_summary["wins"] / decision_summary["bets"]
+        st.dataframe(decision_summary, use_container_width=True)
+
+        st.subheader("Recent Performance")
+
+        recent_rows = []
+
+        latest_date = settled_df["match_date"].max()
+
+        for days in [30, 90, 180]:
+            start_date = latest_date - pd.Timedelta(days=days)
+            recent_df = settled_df[settled_df["match_date"] >= start_date].copy()
+
+            if len(recent_df) == 0:
+                continue
+
+            recent_rows.append({
+                "period": f"Last {days} days",
+                "bets": len(recent_df),
+                "wins": int(recent_df["win"].sum()),
+                "win_rate": f"{recent_df['win'].mean() * 100:.1f}%"
+            })
+
+        if recent_rows:
+            st.dataframe(pd.DataFrame(recent_rows), use_container_width=True)
+        else:
+            st.info("未有近期回溯資料。")
+
+        st.subheader("Backtest Detail")
+        display_df = settled_df.copy()
+        display_df["final_over_probability"] = display_df["final_over_probability"].map(lambda x: f"{x * 100:.1f}%")
+        display_df["final_under_probability"] = display_df["final_under_probability"].map(lambda x: f"{x * 100:.1f}%")
+        display_df["final_avg_goals"] = display_df["final_avg_goals"].map(lambda x: f"{x:.2f}")
+
+        st.dataframe(display_df.tail(300).iloc[::-1], use_container_width=True)
 
 def show_bet_log(df):
     st.subheader("Bet Log Dashboard")
