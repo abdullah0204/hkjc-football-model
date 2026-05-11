@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("HKJC Football Goal Model")
-st.write("Version 18: Strong Picks Scanner + Backtest + Single Match Model")
+st.write("Version 19A: Team Backtest + Strong Picks Scanner + Backtest")
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvctEexKxd5XWdetu8Swx_UoiAYi8omOjKlIPGfpogGiuMlObrdEta81U5OUhwc9_QegMpmT3Iz3cZ/pub?gid=1411325930&single=true&output=csv"
 
@@ -835,7 +835,277 @@ def run_backtest(df, league_col, home_col, away_col, goals_col, date_col, line, 
 
     return pd.DataFrame(results)
 
+def analyse_team_backtest(df, league_col, home_col, away_col, goals_col, date_col, home_team, away_team, line, recent_n):
+    home_team = str(home_team).strip()
+    away_team = str(away_team).strip()
 
+    if not home_team or not away_team:
+        return None
+
+    data = df.copy()
+    data = data.dropna(subset=[goals_col, date_col])
+    data[goals_col] = pd.to_numeric(data[goals_col], errors="coerce")
+    data = data.dropna(subset=[goals_col])
+    data = data.sort_values(date_col)
+
+    h2h_df = data[
+        (
+            (data[home_col].astype(str) == home_team) &
+            (data[away_col].astype(str) == away_team)
+        ) |
+        (
+            (data[home_col].astype(str) == away_team) &
+            (data[away_col].astype(str) == home_team)
+        )
+    ].copy()
+
+    home_all = data[
+        (data[home_col].astype(str) == home_team) |
+        (data[away_col].astype(str) == home_team)
+    ].copy()
+
+    away_all = data[
+        (data[home_col].astype(str) == away_team) |
+        (data[away_col].astype(str) == away_team)
+    ].copy()
+
+    if recent_n != "All":
+        home_recent = home_all.tail(int(recent_n)).copy()
+        away_recent = away_all.tail(int(recent_n)).copy()
+    else:
+        home_recent = home_all.copy()
+        away_recent = away_all.copy()
+
+    combined_recent = pd.concat([home_recent, away_recent], ignore_index=True)
+
+    def make_stats(sample_df):
+        if sample_df.empty:
+            return {
+                "matches": 0,
+                "avg_goals": 0,
+                "median_goals": 0,
+                "over_rate": 0,
+                "under_rate": 0
+            }
+
+        over_rate = (sample_df[goals_col] > line).mean()
+        under_rate = (sample_df[goals_col] < line).mean()
+
+        return {
+            "matches": len(sample_df),
+            "avg_goals": sample_df[goals_col].mean(),
+            "median_goals": sample_df[goals_col].median(),
+            "over_rate": over_rate,
+            "under_rate": under_rate
+        }
+
+    h2h_stats = make_stats(h2h_df)
+    home_stats = make_stats(home_recent)
+    away_stats = make_stats(away_recent)
+    combined_stats = make_stats(combined_recent)
+
+    over_score = 0
+    under_score = 0
+    reasons = []
+    risks = []
+
+    if h2h_stats["matches"] >= 3:
+        over_score += h2h_stats["over_rate"] * 25
+        under_score += h2h_stats["under_rate"] * 25
+        reasons.append("H2H sample available.")
+    else:
+        risks.append("H2H sample is small.")
+
+    over_score += home_stats["over_rate"] * 25
+    under_score += home_stats["under_rate"] * 25
+
+    over_score += away_stats["over_rate"] * 25
+    under_score += away_stats["under_rate"] * 25
+
+    over_score += combined_stats["over_rate"] * 25
+    under_score += combined_stats["under_rate"] * 25
+
+    if combined_stats["avg_goals"] >= line + 0.35:
+        over_score += 10
+        reasons.append("Combined average goals support Over.")
+
+    if combined_stats["avg_goals"] <= line - 0.35:
+        under_score += 10
+        reasons.append("Combined average goals support Under.")
+
+    if line == 3.5:
+        under_score += 5
+        risks.append("3.5 line favours Under unless both teams show strong high-goal pattern.")
+
+    if combined_stats["matches"] < 10:
+        risks.append("Combined recent sample is below 10.")
+
+    if home_stats["matches"] < 5:
+        risks.append("Home team sample is low.")
+
+    if away_stats["matches"] < 5:
+        risks.append("Away team sample is low.")
+
+    if over_score > under_score + 8:
+        suggested = f"Over {line}"
+    elif under_score > over_score + 8:
+        suggested = f"Under {line}"
+    else:
+        suggested = "Watch Only"
+
+    confidence_gap = abs(over_score - under_score)
+
+    if confidence_gap >= 20 and combined_stats["matches"] >= 20:
+        confidence = "High"
+    elif confidence_gap >= 10 and combined_stats["matches"] >= 10:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+
+    return {
+        "home_team": home_team,
+        "away_team": away_team,
+        "line": line,
+        "recent_n": recent_n,
+        "suggested": suggested,
+        "confidence": confidence,
+        "over_score": over_score,
+        "under_score": under_score,
+        "h2h_stats": h2h_stats,
+        "home_stats": home_stats,
+        "away_stats": away_stats,
+        "combined_stats": combined_stats,
+        "reasons": reasons,
+        "risks": risks,
+        "h2h_df": h2h_df.tail(20),
+        "home_recent": home_recent.tail(20),
+        "away_recent": away_recent.tail(20)
+    }
+
+
+def show_team_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_col, team_list):
+    st.subheader("Team Backtest V19A")
+    st.write("針對一場比賽，檢查兩隊歷史入球方向。")
+
+    with st.form("team_backtest_form"):
+        c1, c2 = st.columns(2)
+
+        with c1:
+            home_input = st.text_input("Home Team", value="阿克隆陶爾亞蒂")
+
+        with c2:
+            away_input = st.text_input("Away Team", value="羅斯托夫")
+
+        home_match, home_score = get_best_team_match(home_input, team_list)
+        away_match, away_score = get_best_team_match(away_input, team_list)
+
+        st.write({
+            "matched_home": home_match,
+            "home_match_score": round(home_score * 100, 1),
+            "matched_away": away_match,
+            "away_match_score": round(away_score * 100, 1)
+        })
+
+        c3, c4 = st.columns(2)
+
+        with c3:
+            selected_line = st.selectbox("Goal Line", [2.5, 3.5], index=1)
+
+        with c4:
+            recent_n = st.selectbox("Recent Matches", [10, 20, 30, "All"], index=1)
+
+        run_team_bt = st.form_submit_button("Run Team Backtest", use_container_width=True)
+
+    if not run_team_bt:
+        st.warning("輸入兩隊後，按 Run Team Backtest。")
+        return
+
+    if home_match == NO_TEAM_OPTION or away_match == NO_TEAM_OPTION:
+        st.error("隊名未能配對。請改用 database 入面較接近嘅隊名。")
+        return
+
+    result = analyse_team_backtest(
+        df,
+        league_col,
+        home_col,
+        away_col,
+        goals_col,
+        date_col,
+        home_match,
+        away_match,
+        selected_line,
+        recent_n
+    )
+
+    if result is None:
+        st.error("未能完成 Team Backtest。")
+        return
+
+    st.subheader("Final Team View")
+
+    m1, m2, m3, m4 = st.columns(4)
+
+    with m1:
+        st.metric("Suggested", result["suggested"])
+
+    with m2:
+        st.metric("Confidence", result["confidence"])
+
+    with m3:
+        st.metric("Over Score", f"{result['over_score']:.1f}")
+
+    with m4:
+        st.metric("Under Score", f"{result['under_score']:.1f}")
+
+    st.subheader("Summary Table")
+
+    rows = []
+
+    for name, stats in [
+        ("H2H", result["h2h_stats"]),
+        ("Home Recent", result["home_stats"]),
+        ("Away Recent", result["away_stats"]),
+        ("Combined Recent", result["combined_stats"])
+    ]:
+        rows.append({
+            "section": name,
+            "matches": stats["matches"],
+            "avg_goals": round(stats["avg_goals"], 2),
+            "median_goals": round(stats["median_goals"], 2),
+            f"Over {selected_line}": f"{stats['over_rate'] * 100:.1f}%",
+            f"Under {selected_line}": f"{stats['under_rate'] * 100:.1f}%"
+        })
+
+    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    st.subheader("Reasons")
+
+    if result["reasons"]:
+        for item in result["reasons"]:
+            st.write(f"- {item}")
+    else:
+        st.write("- No strong positive reason.")
+
+    st.subheader("Risk Notes")
+
+    if result["risks"]:
+        for item in result["risks"]:
+            st.write(f"- {item}")
+    else:
+        st.write("- No major risk note.")
+
+    st.subheader("H2H Detail")
+    if result["h2h_df"].empty:
+        st.info("No H2H records found.")
+    else:
+        st.dataframe(result["h2h_df"], use_container_width=True)
+
+    st.subheader("Home Recent Detail")
+    st.dataframe(result["home_recent"], use_container_width=True)
+
+    st.subheader("Away Recent Detail")
+    st.dataframe(result["away_recent"], use_container_width=True)
+    
 try:
     raw_df = load_csv(SHEET_CSV_URL)
 except Exception as e:
@@ -860,7 +1130,7 @@ if not upcoming_df.empty:
 else:
     st.warning("Upcoming matches not loaded or empty.")
 
-tab_model, tab_backtest, tab_strong = st.tabs(["Model", "Backtest", "Strong Picks"])
+tab_model, tab_backtest, tab_strong, tab_team = st.tabs(["Model", "Backtest", "Strong Picks", "Team Backtest])
 
 
 with tab_model:
@@ -1110,3 +1380,13 @@ with tab_strong:
                     "text/csv",
                     use_container_width=True
                 )
+                with tab_team:
+    show_team_backtest_dashboard(
+        df,
+        league_col,
+        home_col,
+        away_col,
+        goals_col,
+        date_col,
+        team_list
+    )
