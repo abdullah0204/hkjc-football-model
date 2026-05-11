@@ -1381,8 +1381,9 @@ with tab_strong:
                     use_container_width=True
                 )
                 with tab_team:
+    with tab_team:
     show_team_backtest_dashboard(
-    df,
+        df,
         league_col,
         home_col,
         away_col,
