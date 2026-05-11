@@ -1130,7 +1130,7 @@ if not upcoming_df.empty:
 else:
     st.warning("Upcoming matches not loaded or empty.")
 
-tab_model, tab_backtest, tab_strong, tab_team = st.tabs(["Model", "Backtest", "Strong Picks", "Team Backtest])
+tab_model, tab_backtest, tab_strong, tab_team = st.tabs(["Model", "Backtest", "Strong Picks", "Team Backtest"])
 
 
 with tab_model:
