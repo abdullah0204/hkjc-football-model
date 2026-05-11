@@ -1130,7 +1130,9 @@ if not upcoming_df.empty:
 else:
     st.warning("Upcoming matches not loaded or empty.")
 
-tab_model, tab_backtest, tab_strong, tab_team = st.tabs(["Model", "Backtest", "Strong Picks", "Team Backtest"])
+tab_model, tab_backtest, tab_strong, tab_team = st.tabs(
+    ["Model", "Backtest", "Strong Picks", "Team Backtest"]
+)
 
 
 with tab_model:
@@ -1181,8 +1183,28 @@ with tab_model:
             league_result = analyse_league(df, league_col, goals_col, selected_league, line)
             home_result = analyse_team(df, home_col, away_col, goals_col, matched_home, line)
             away_result = analyse_team(df, home_col, away_col, goals_col, matched_away, line)
-            home_recent = analyse_recent_team_form(df, home_col, away_col, goals_col, date_col, matched_home, line, 10)
-            away_recent = analyse_recent_team_form(df, home_col, away_col, goals_col, date_col, matched_away, line, 10)
+
+            home_recent = analyse_recent_team_form(
+                df,
+                home_col,
+                away_col,
+                goals_col,
+                date_col,
+                matched_home,
+                line,
+                10
+            )
+
+            away_recent = analyse_recent_team_form(
+                df,
+                home_col,
+                away_col,
+                goals_col,
+                date_col,
+                matched_away,
+                line,
+                10
+            )
 
             final = make_final_decision(
                 league_result,
@@ -1235,7 +1257,11 @@ with tab_backtest:
     st.subheader("Backtest 17A Strict Fast")
 
     valid_rows = df.dropna(subset=[date_col, goals_col])
-    st.info(f"Valid rows: {len(valid_rows)} | Date column: {date_col} | Goals column: {goals_col}")
+    st.info(
+        f"Valid rows: {len(valid_rows)} | "
+        f"Date column: {date_col} | "
+        f"Goals column: {goals_col}"
+    )
 
     with st.form("backtest_form"):
         c1, c2, c3 = st.columns(3)
@@ -1244,16 +1270,32 @@ with tab_backtest:
             selected_line = st.selectbox("Backtest Line", [2.5, 3.5], index=0)
 
         with c2:
-            max_rows = st.selectbox("Rows to Test", [1000, 3000, 5000, 10000, 30000], index=3)
+            max_rows = st.selectbox(
+                "Rows to Test",
+                [1000, 3000, 5000, 10000, 30000],
+                index=3
+            )
 
         with c3:
-            only_strong = st.checkbox("Only Conservative Strong Signals", value=True)
+            only_strong = st.checkbox(
+                "Only Conservative Strong Signals",
+                value=True
+            )
 
         run_bt = st.form_submit_button("Run Backtest", use_container_width=True)
 
     if run_bt:
         with st.spinner("Running strict backtest..."):
-            bt = run_backtest(df, league_col, home_col, away_col, goals_col, date_col, selected_line, max_rows=max_rows)
+            bt = run_backtest(
+                df,
+                league_col,
+                home_col,
+                away_col,
+                goals_col,
+                date_col,
+                selected_line,
+                max_rows=max_rows
+            )
 
         if bt.empty:
             st.warning("未有足夠資料完成 backtest。")
@@ -1283,12 +1325,19 @@ with tab_backtest:
                     st.metric("Win Rate", f"{win_rate * 100:.1f}%")
 
                 with m3:
-                    st.metric("Over Win Rate", f"{over_df['win'].mean() * 100:.1f}%" if len(over_df) else "0.0%")
+                    if len(over_df):
+                        st.metric("Over Win Rate", f"{over_df['win'].mean() * 100:.1f}%")
+                    else:
+                        st.metric("Over Win Rate", "0.0%")
 
                 with m4:
-                    st.metric("Under Win Rate", f"{under_df['win'].mean() * 100:.1f}%" if len(under_df) else "0.0%")
+                    if len(under_df):
+                        st.metric("Under Win Rate", f"{under_df['win'].mean() * 100:.1f}%")
+                    else:
+                        st.metric("Under Win Rate", "0.0%")
 
                 st.subheader("Performance by League")
+
                 league_summary = settled.groupby("league_ch").agg(
                     bets=("win", "count"),
                     wins=("win", "sum"),
@@ -1299,13 +1348,17 @@ with tab_backtest:
 
                 st.write("Best Leagues")
                 st.dataframe(
-                    league_summary[league_summary["bets"] >= 5].sort_values(["win_rate", "bets"], ascending=[False, False]).head(15),
+                    league_summary[league_summary["bets"] >= 5]
+                    .sort_values(["win_rate", "bets"], ascending=[False, False])
+                    .head(15),
                     use_container_width=True
                 )
 
                 st.write("Worst Leagues")
                 st.dataframe(
-                    league_summary[league_summary["bets"] >= 5].sort_values(["win_rate", "bets"], ascending=[True, False]).head(15),
+                    league_summary[league_summary["bets"] >= 5]
+                    .sort_values(["win_rate", "bets"], ascending=[True, False])
+                    .head(15),
                     use_container_width=True
                 )
 
@@ -1333,7 +1386,10 @@ with tab_strong:
             with c3:
                 show_grade = st.selectbox("Show Grade", ["A only", "A + B", "All"], index=1)
 
-            run_scan = st.form_submit_button("Run Strong Picks Scanner", use_container_width=True)
+            run_scan = st.form_submit_button(
+                "Run Strong Picks Scanner",
+                use_container_width=True
+            )
 
         if run_scan:
             with st.spinner("Scanning upcoming matches..."):
@@ -1365,7 +1421,9 @@ with tab_strong:
                     st.warning("目前冇 A / B 級建議。以下係全部掃描結果。")
                     display = picks.copy()
 
-                display["model_probability"] = display["model_probability"].map(lambda x: f"{x * 100:.1f}%")
+                display["model_probability"] = display["model_probability"].map(
+                    lambda x: f"{x * 100:.1f}%"
+                )
                 display["fair_odds"] = display["fair_odds"].map(lambda x: f"{x:.2f}")
                 display["avg_goals"] = display["avg_goals"].map(lambda x: f"{x:.2f}")
 
@@ -1380,8 +1438,9 @@ with tab_strong:
                     "text/csv",
                     use_container_width=True
                 )
-                with tab_team:
-    with tab_team:
+
+
+with tab_team:
     show_team_backtest_dashboard(
         df,
         league_col,
