@@ -1087,76 +1087,180 @@ def run_backtest(df, league_col, home_col, away_col, goals_col, date_col, line, 
     bt_df = bt_df.dropna(subset=[date_col, goals_col])
     bt_df[goals_col] = pd.to_numeric(bt_df[goals_col], errors="coerce")
     bt_df = bt_df.dropna(subset=[goals_col])
+
+    bt_df[date_col] = pd.to_datetime(bt_df[date_col], errors="coerce")
+    bt_df = bt_df.dropna(subset=[date_col])
+
+    bt_df["backtest_date_only"] = bt_df[date_col].dt.date
     bt_df = bt_df.sort_values(date_col).reset_index(drop=True)
 
     if len(bt_df) > max_rows:
         bt_df = bt_df.tail(max_rows).reset_index(drop=True)
 
+    league_stats = {}
+    team_stats = {}
     results = []
 
-    for idx, row in bt_df.iterrows():
-        match_date = row[date_col]
-        league = str(row[league_col])
-        home = str(row[home_col])
-        away = str(row[away_col])
-        actual_goals = row[goals_col]
+    def empty_stats():
+        return {
+            "matches": 0,
+            "goals_sum": 0.0,
+            "over_count": 0
+        }
 
-        history_df = bt_df[bt_df[date_col] < match_date].copy()
+    def get_rate(stats):
+        if stats is None:
+            return None
 
-        if len(history_df) < 50:
-            continue
+        if stats["matches"] <= 0:
+            return None
 
-        league_history = history_df[history_df[league_col].astype(str) == league].copy()
+        return {
+            "sample": stats["matches"],
+            "avg_goals": stats["goals_sum"] / stats["matches"],
+            "over_rate": stats["over_count"] / stats["matches"]
+        }
 
-        home_history = get_backtest_team_df(history_df, home_col, away_col, home)
-        away_history = get_backtest_team_df(history_df, home_col, away_col, away)
+    def update_stats(stats_dict, key, goals):
+        if key not in stats_dict:
+            stats_dict[key] = empty_stats()
 
-        signal = calculate_backtest_signal(
-            league_history,
-            home_history,
-            away_history,
-            goals_col,
-            line
-        )
+        stats_dict[key]["matches"] += 1
+        stats_dict[key]["goals_sum"] += goals
 
-        if signal is None:
-            continue
+        if goals > line:
+            stats_dict[key]["over_count"] += 1
 
-        decision = signal["decision"]
+    grouped_dates = sorted(bt_df["backtest_date_only"].dropna().unique())
 
-        if decision == "Watch Only":
-            actual_result = "Watch Only"
-            win = None
-        elif decision == "Over":
-            actual_result = "Over" if actual_goals > line else "Under"
-            win = actual_goals > line
-        elif decision == "Under":
-            actual_result = "Under" if actual_goals < line else "Over"
-            win = actual_goals < line
-        else:
-            actual_result = "Watch Only"
-            win = None
+    for current_day in grouped_dates:
+        day_df = bt_df[bt_df["backtest_date_only"] == current_day].copy()
 
-        results.append({
-            "match_date": match_date,
-            "league_ch": league,
-            "home_team_ch": home,
-            "away_team_ch": away,
-            "line": line,
-            "actual_goals": actual_goals,
-            "model_decision": decision,
-            "actual_result": actual_result,
-            "win": win,
-            "final_over_probability": signal["final_over"],
-            "final_under_probability": signal["final_under"],
-            "final_avg_goals": signal["final_avg"],
-            "league_sample": signal["league_sample"],
-            "home_sample": signal["home_sample"],
-            "away_sample": signal["away_sample"],
-            "data_source": signal["data_source"]
-        })
+        day_results = []
+
+        for _, row in day_df.iterrows():
+            match_date = row[date_col]
+            league = str(row[league_col])
+            home = str(row[home_col])
+            away = str(row[away_col])
+            actual_goals = float(row[goals_col])
+
+            league_rate = get_rate(league_stats.get(league))
+            home_rate = get_rate(team_stats.get(home))
+            away_rate = get_rate(team_stats.get(away))
+
+            if not league_rate:
+                continue
+
+            if league_rate["sample"] < 10:
+                continue
+
+            league_over = league_rate["over_rate"]
+            league_avg = league_rate["avg_goals"]
+
+            team_over_values = []
+            team_avg_values = []
+
+            home_sample = 0
+            away_sample = 0
+
+            if home_rate and home_rate["sample"] >= 3:
+                team_over_values.append(home_rate["over_rate"])
+                team_avg_values.append(home_rate["avg_goals"])
+                home_sample = home_rate["sample"]
+
+            if away_rate and away_rate["sample"] >= 3:
+                team_over_values.append(away_rate["over_rate"])
+                team_avg_values.append(away_rate["avg_goals"])
+                away_sample = away_rate["sample"]
+
+            if team_over_values:
+                team_over = sum(team_over_values) / len(team_over_values)
+                team_avg = sum(team_avg_values) / len(team_avg_values)
+
+                final_over = league_over * 0.60 + team_over * 0.40
+                final_avg = league_avg * 0.60 + team_avg * 0.40
+                data_source = "League 60% + Team 40%"
+            else:
+                final_over = league_over
+                final_avg = league_avg
+                data_source = "League only"
+
+            final_under = 1 - final_over
+
+            if line == 2.5:
+                if final_over >= 0.58 and final_avg >= 2.65:
+                    decision = "Over"
+                    confidence = "Strong"
+                elif final_under >= 0.58 and final_avg <= 2.60:
+                    decision = "Under"
+                    confidence = "Strong"
+                else:
+                    decision = "Watch Only"
+                    confidence = "Weak"
+
+            elif line == 3.5:
+                if final_over >= 0.48 and final_avg >= 3.30:
+                    decision = "Over"
+                    confidence = "Strong"
+                elif final_under >= 0.58:
+                    decision = "Under"
+                    confidence = "Strong"
+                else:
+                    decision = "Watch Only"
+                    confidence = "Weak"
+
+            else:
+                decision = "Watch Only"
+                confidence = "Weak"
+
+            if decision == "Watch Only":
+                actual_result = "Watch Only"
+                win = None
+            elif decision == "Over":
+                actual_result = "Over" if actual_goals > line else "Under"
+                win = actual_goals > line
+            elif decision == "Under":
+                actual_result = "Under" if actual_goals < line else "Over"
+                win = actual_goals < line
+            else:
+                actual_result = "Watch Only"
+                win = None
+
+            day_results.append({
+                "match_date": match_date,
+                "league_ch": league,
+                "home_team_ch": home,
+                "away_team_ch": away,
+                "line": line,
+                "actual_goals": actual_goals,
+                "model_decision": decision,
+                "actual_result": actual_result,
+                "win": win,
+                "confidence": confidence,
+                "final_over_probability": final_over,
+                "final_under_probability": final_under,
+                "final_avg_goals": final_avg,
+                "league_sample": league_rate["sample"],
+                "home_sample": home_sample,
+                "away_sample": away_sample,
+                "data_source": data_source
+            })
+
+        results.extend(day_results)
+
+        for _, row in day_df.iterrows():
+            league = str(row[league_col])
+            home = str(row[home_col])
+            away = str(row[away_col])
+            actual_goals = float(row[goals_col])
+
+            update_stats(league_stats, league, actual_goals)
+            update_stats(team_stats, home, actual_goals)
+            update_stats(team_stats, away, actual_goals)
 
     return pd.DataFrame(results)
+
 
 
 def show_backtest_dashboard(df, league_col, home_col, away_col, goals_col, date_col):
